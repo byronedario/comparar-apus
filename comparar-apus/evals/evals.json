@@ -1,0 +1,63 @@
+{
+  "skill_name": "comparar-apus",
+  "evals": [
+    {
+      "id": 0,
+      "name": "oferta-excel-desagregacion",
+      "prompt": "Necesito validar los APUs de una oferta. El archivo base es '5.2 APUS_CAUPICHU principal.xlsx' y el del oferente es '3-14-APUS CON DESEGREGACION Oferente.xlsx'. Verifica que en cada rubro coincidan el nombre, la unidad y, en cada sección, la descripción, cantidad y unidad de cada ítem. Entrégame un Excel con las diferencias.",
+      "expected_output": "Excel con RESUMEN/DIFERENCIAS/SOLO ERRORES/NOTAS. 137 rubros, 26 a revisar y 84 OK. Debe detectar los 11 materiales en cero, las 35 cantidades por debajo, el CEMENTO faltante del rubro 56 y los indirectos (9 rubros bajan 8 puntos, fuera de tolerancia), sin marcar como error las 60 cantidades por encima.",
+      "files": [
+        "5.2 APUS_CAUPICHU principal.xlsx",
+        "3-14-APUS CON DESEGREGACION Oferente.xlsx"
+      ],
+      "assertions": [
+        "Lee y compara los 137 rubros de los dos archivos (no un subconjunto)",
+        "Detecta los 11 materiales cuya cantidad quedó en cero y los señala como error grave, aparte",
+        "Reporta como graves las cantidades que quedaron por debajo de la referencia, incluidas las que solo bajaron por redondeo",
+        "No reporta como error las cantidades que quedaron por encima de la referencia",
+        "Detecta el material CEMENTO que falta en el rubro 56",
+        "Reporta los indirectos agrupados en una o dos líneas, no rubro por rubro, aplicando la tolerancia de 5 puntos",
+        "Entrega un Excel con RESUMEN, DIFERENCIAS, SOLO ERRORES y NOTAS",
+        "No reporta diferencias de precios, tarifas, jornales ni rendimientos, ni usa el monto de la oferta como hallazgo"
+      ]
+    },
+    {
+      "id": 1,
+      "name": "oferta-en-pdf",
+      "prompt": "compara los apus del pdf '3-13-APUS-LIGA-CAUPICHU-OK-signed Oferente.pdf' contra el archivo de referencia '5.2 APUS_CAUPICHU principal.xlsx', son 137 rubros. dime dónde el oferente se apartó de la referencia",
+      "expected_output": "Excel de diferencias + resumen en el chat. 40 rubros a revisar. Debe leer las 137 páginas (coma decimal) sin que se le diga el preset, detectar los rubros 61, 63 y 96, los 7 ítems faltantes y los indirectos agrupados.",
+      "files": [
+        "5.2 APUS_CAUPICHU principal.xlsx",
+        "3-13-APUS-LIGA-CAUPICHU-OK-signed Oferente.pdf"
+      ],
+      "assertions": [
+        "Extrae los 137 rubros de las 137 páginas del PDF interpretando bien la coma decimal, sin que se le indique el formato",
+        "Detecta que los rubros 61, 63 y 96 traen el APU cambiado",
+        "Detecta las cantidades por debajo de la referencia y los ítems que faltan",
+        "Distingue el texto truncado por la impresión del PDF de una diferencia real",
+        "Reporta los indirectos agrupados: 15 puntos de baja en 128 rubros y 20 en 9, fuera de tolerancia",
+        "Entrega un Excel con RESUMEN, DIFERENCIAS, SOLO ERRORES y NOTAS",
+        "Da en el chat los hallazgos graves agrupados por patrón, no rubro por rubro"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "referencia-con-hojas-rubro",
+      "prompt": "Es un proyecto nuevo, hay que hacer la misma validación de los APUs del oferente. El archivo base es 'APUS diego ocaña SECRETARIA.xlsx' y el del oferente es '10-16-22 LICO-MDMQ-2026-4909 DIEGO FINAL 04-09-2026.xlsx'.",
+      "expected_output": "44 rubros a revisar, 64 hallazgos graves y 3 en el presupuesto (rubro 5 con la especificación cambiada, rubros 14 y 73 con menos cantidad). Los 92 casos de cantidad 1 salen como observación menor, no como error.",
+      "files": [
+        "APUS diego ocaña SECRETARIA.xlsx",
+        "10-16-22 LICO-MDMQ-2026-4909 DIEGO FINAL 04-09-2026.xlsx"
+      ],
+      "assertions": [
+        "Descubre que la referencia usa hojas 'RubroN' y la oferta hojas '1'..'78', y verifica la correspondencia por nombre",
+        "Trata como observación menor los ~92 casos de cantidad 1 donde la referencia tiene fracciones, porque son cantidad mayor",
+        "Reporta como graves los 10 ítems que faltan y las 6 cantidades por debajo de la referencia",
+        "Trata como menor el renombrado de mano de obra que conserva el código ocupacional, y como grave el cambio de categoría (C3 a C1)",
+        "Compara los dos presupuestos y detecta el rubro 14 (70 a 9 m2) y el 73 (250 a 225)",
+        "Detecta el cambio de unidad del tubo de acero en el rubro 25 (Kg a u)",
+        "Entrega un Excel con RESUMEN, DIFERENCIAS, PRESUPUESTO, SOLO ERRORES y NOTAS"
+      ]
+    }
+  ]
+}
