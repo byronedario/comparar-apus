@@ -458,6 +458,13 @@ def pie_pdf(pagina, coma_decimal):
                         break
             if m:
                 out['indirecto_pct'] = _f(m.group(1), coma_decimal)
+            elif re.search(r'INDIRECTOS?\s*%', s, re.I) and cifras:
+                # "INDIRECTOS %    20.000    3.72": el signo va pegado al rotulo
+                # y no a la cifra, asi que el porcentaje es el primer numero de
+                # la fila
+                v = _f(cifras[0], coma_decimal)
+                if v is not None and 0 < v <= 100:
+                    out['indirecto_pct'] = v
             elif out['directo']:
                 # Hay plantillas que imprimen el porcentaje sin el signo:
                 # "COSTO INDIRECTO    17,00    0,2732". Cual de las dos cifras
@@ -510,6 +517,15 @@ ETIQUETAS = {
                                  r'AN[ÁA]LISIS|ANALISIS',
                       'pre': _pre_rubro_detalle,
                       'coma_decimal': True, 'modo': 'izquierda'},
+    # "Hoja 4 de 78" arriba, "RUBRO:" con el nombre y "UNIDAD:" en el mismo
+    # renglon, "DETALLE:" con "R(H/U):" a su derecha
+    'hoja_n_de_rubro': {'num': r'Hoja\s+(\d+)\s+de\s+\d+',
+                        'nombre': r'\bRUBRO:\s*',
+                        'unidad': r'\bUNIDAD:\s*',
+                        'detalle': r'\bDETALLE:\s*',
+                        'ignorar': r'ANALISIS DE PRECIOS|R\(H/U\)|CONSTRUCCION|'
+                                   r'INFRAESTRUCTURA|LIGA DEPORTIVA|Hoja\s+\d+\s+de',
+                        'coma_decimal': False, 'modo': 'izquierda'},
     # USHAY con las columnas del VAE a la derecha: "CODIGO DEL RUBRO: 4",
     # "NOMBRE DEL RUBRO:", "DETALLE:" impreso encima de "UNIDAD:"
     'ushay_vae': {'num': r'C[ÓO]DIGO DEL RUBRO:\s*(\d+)',
@@ -532,6 +548,7 @@ DEFECTOS = {'rubro_n':   {'coma_decimal': False, 'modo': 'derecha'},
             'hoja_n_de': {'coma_decimal': True,  'modo': 'izquierda'},
             'uem_codigo': {'coma_decimal': False, 'modo': 'izquierda'},
             'rubro_detalle': {'coma_decimal': True, 'modo': 'izquierda'},
+            'hoja_n_de_rubro': {'coma_decimal': False, 'modo': 'izquierda'},
             'ushay_vae': {'coma_decimal': True, 'modo': 'izquierda'}}
 
 
@@ -712,6 +729,14 @@ def _cantidad_oculta(cant, dec, cifras, decs=None, tol=0.02):
         # el costo impreso dentro de su propia precision: 0,0125.
         dt = (decs[j] if decs and j < len(decs) and decs[j] else 4)
         margen = 0.5 * 10 ** (-dt) + 1e-9
+        # Y no se despeja nada si el costo viene demasiado redondeado para
+        # sostenerlo. Hay plantillas que imprimen TODA la fila con dos decimales:
+        # ahi la aritmetica no distingue 0,01 de 0,009, y aceptar el despeje
+        # convertiria una cantidad correcta en una "cantidad menor" inventada.
+        # Se exige que la diferencia que se reclama pese al menos cinco veces el
+        # redondeo del propio costo.
+        if abs(q - cant) * c < 5 * margen:
+            continue
         # Y solo se acepta si ese numero es CORTO. Una cantidad de obra se
         # escribe con cuatro decimales como mucho; si hacen falta seis para
         # reproducir el costo, lo que falla es la identificacion de las columnas

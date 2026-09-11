@@ -263,6 +263,12 @@ diferencias de formato y una cantidad de menos está para revisar, no en verde.
 tocar una coma y aun así bajar la cantidad de un rubro en el presupuesto. Si
 los dos archivos lo traen, compáralo siempre.
 
+**El despeje necesita que el costo venga con decimales.** Hay plantillas que
+imprimen TODA la fila con dos decimales; ahí la aritmética no distingue `0,01` de
+`0,009` y el despeje de abajo se apaga solo. Es deliberado: aceptarlo convertiría
+una cantidad correcta en una "cantidad menor" inventada, que es el error que se
+está tratando de evitar.
+
 **La celda impresa esconde decimales.** Excel imprime `0,0125` como `0,01` si la
 celda tiene formato de dos decimales, y en el PDF el resto ya no existe. Leído
 tal cual, eso sale como una cantidad menor que la referencia —grave— cuando el
@@ -289,8 +295,12 @@ aritmética de la fila y el subtotal del rubro: lo que no cuadra está mal leíd
 
 ## Si el formato no encaja
 
-Copia de `scripts/lectores.py` la función más parecida y ajusta el mapa de
-columnas; son unas quince líneas. Para PDF, agrega un preset a
+Para Excel, prueba primero el formato `G` (`lectores.formato_generico`): no fija
+ninguna columna, las busca por su nombre en la fila de encabezados de cada
+sección, así que aguanta que la tabla esté corrida o que `UNIDAD` aparezca entre
+la descripción y la cantidad solo en MATERIALES. `detectar()` ya lo incluye. Si
+aun así no encaja, copia de `scripts/lectores.py` la función más parecida y
+ajusta el mapa de columnas; son unas quince líneas. Para PDF, agrega un preset a
 `lector_pdf.ETIQUETAS` con su `pre`, `coma_decimal` y `modo` —y `detalle_fiable:
 False` si la plantilla imprime la celda DETALLE encima de la de UNIDAD, para que
 la comparación no invente diferencias de especificación.

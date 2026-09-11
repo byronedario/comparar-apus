@@ -144,8 +144,12 @@ def cod_ocupacional(s):
     Identifica al obrero aunque el oferente reescriba la categoria:
     'ESTRUC. OCUPAC. E2 PEON' y 'Estr. Oc. E2 PEON' son el mismo E2.
     """
-    m = re.search(r'\b(?:ESTRUC?\.?\s*)?(?:OCUPAC?\.?|OC\.?)\s*([A-E][1-3])\b',
-                  (s or '').upper())
+    s = (s or '').upper()
+    # Las abreviaturas van de "ESTRUC. OCUPAC." a "Est. Ocu." o "Estr.Oc.", y el
+    # codigo puede ir detras del oficio y entre parentesis: "Peon (Est. Ocu. E2)".
+    m = re.search(r'\bEST\w*\.?\s*OC\w*\.?\s*\(?\s*([A-E][1-3])\b', s)
+    if not m:
+        m = re.search(r'\bOCUPAC?\.?\s*([A-E][1-3])\b', s)
     return m.group(1) if m else None
 
 
@@ -233,7 +237,7 @@ def desordenado(filas):
 # esta en separar lo que hay que corregir de lo que solo esta escrito distinto.
 
 EQUIV_UNIDAD = [
-    {'GALON', 'GAL', 'GLN', 'GALONES'},
+    {'GALON', 'GAL', 'GLN', 'GL', 'GALONES'},
     {'L', 'LT', 'LTR', 'LITRO', 'LITROS'},
     {'U', 'UN', 'UNIDAD', 'C/U'},
     {'KG', 'KGS', 'KILO', 'KILOS', 'KILOGRAMO'},

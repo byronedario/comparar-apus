@@ -274,6 +274,20 @@ se superponen y el texto sale entrelazado. El preset lo declara con
 sola) y la unidad del rubro se rellena desde la tabla de cantidades del mismo
 documento.
 
+## Cosas que rompen el emparejamiento
+
+**La abreviatura de la estructura ocupacional.** El mismo obrero se escribe
+`ESTRUC. OCUPAC. E2 PEON`, `Estr. Oc. E2 PEON` o `Peón (Est. Ocu. E2)`, y en el
+último caso el código va detrás del oficio y entre paréntesis.
+`apu.cod_ocupacional()` los reconoce todos; si falla, el oferente aparece
+omitiendo la mitad de su mano de obra —185 ítems "faltantes" en un caso real que
+estaban todos ahí— y eso tapa por completo los hallazgos de verdad.
+
+**La abreviatura de la unidad.** `galón` se escribe `gal`, `gln` o `gl`, y `u` se
+escribe `UNIDAD`. Van en `apu.EQUIV_UNIDAD`; si a una le falta su variante, la
+bandera `unidades_equivalentes_menor` no llega al umbral y doce renombrados
+sistemáticos salen en rojo.
+
 ## Cómo agregar un formato nuevo
 
 1. Vuelca una hoja o página cruda y ubica: fila de la cabecera, filas de

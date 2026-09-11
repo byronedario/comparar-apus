@@ -198,7 +198,114 @@ def formato_c(ws):
     return d
 
 
-FORMATOS = {'A': formato_a, 'B': formato_b, 'C': formato_c}
+# ---------------------------------------------------------------------------
+# Formato generico: no fija ninguna columna, las busca por su NOMBRE
+#
+# Los tres formatos de arriba llevan el mapa de columnas escrito a mano, asi que
+# una plantilla que mueva la tabla una columna a la derecha -o que ponga UNIDAD
+# entre la descripcion y la cantidad solo en MATERIALES- devuelve cero items sin
+# que nada falle. Este lector mira la fila de encabezados de cada seccion y se
+# queda con la columna que se llama DESCRIPCION, UNIDAD y CANTIDAD. Pruebalo
+# antes de escribir un formato nuevo: casi siempre sobra con esto.
+# ---------------------------------------------------------------------------
+_COLS = {'desc': r'DESCRIPCI[ÓO]N|CUADRILLA|RUBRO|DETALLE',
+         'uni': r'UNIDAD|UND\b|^U\.?$',
+         'cant': r'CANTIDAD|CANT\b'}
+_FIN = ('SUBTOTAL', 'PARCIAL', 'TOTAL COSTO', 'COSTO TOTAL', 'ESTOS PRECIOS',
+        'ESTE PRECIO', 'INDIRECTOS', 'UTILIDAD', 'VALOR OFERTADO')
+
+
+def _seccion_en(fila):
+    """(seccion, columna) si esta fila anuncia una seccion; si no, (None, None)."""
+    for c, v in enumerate(fila[1:], 1):
+        t = clean(v).upper().rstrip(':').strip()
+        if t in SECS:
+            return t, c
+    return None, None
+
+
+def _mapa_columnas(fila):
+    """{'desc': col, 'uni': col, 'cant': col} leyendo los nombres de la fila."""
+    m = {}
+    for c, v in enumerate(fila[1:], 1):
+        t = clean(v).upper()
+        if not t:
+            continue
+        for campo, pat in _COLS.items():
+            if campo not in m and re.match(pat, t):
+                m[campo] = c
+                break
+    return m
+
+
+def formato_generico(ws, max_fil=120, max_col=16):
+    g = grid(ws, max_fil, max_col)
+    A = lambda r, c: g[r][c]
+    filas = [[A(r, c) for c in range(0, max_col + 1)] for r in range(0, max_fil + 1)]
+
+    nombre = codigo = unidad = detalle = ''
+    for r in range(1, min(20, max_fil) + 1):
+        for c in range(1, max_col):
+            t = clean(A(r, c))
+            if not t:
+                continue
+            val = next((clean(A(r, k)) for k in range(c + 1, max_col + 1)
+                        if clean(A(r, k))), '')
+            # si lo siguiente a la derecha es otro rotulo ("DETALLE:" seguido de
+            # "R(H/U):"), esta celda esta vacia y no hay que robarle el valor al
+            # vecino
+            if val.endswith(':'):
+                val = ''
+            if re.fullmatch(r'RUBRO\s*:?', t, re.I) and not nombre:
+                nombre = val
+            elif re.fullmatch(r'(NOMBRE DEL RUBRO|DESCRIPCI[ÓO]N)\s*:', t, re.I) and not nombre:
+                nombre = val
+            elif re.fullmatch(r'C[ÓO]DIGO\s*:?', t, re.I) and not codigo:
+                codigo = val
+            elif re.fullmatch(r'UNIDAD\s*:?', t, re.I) and not unidad:
+                unidad = val
+            elif re.fullmatch(r'(DETALLE|ESPECIFICACI[ÓO]N)\s*:?', t, re.I) and not detalle:
+                detalle = val
+
+    secs, r = {}, 1
+    while r <= max_fil:
+        sec, _ = _seccion_en(filas[r])
+        if not sec:
+            r += 1
+            continue
+        # la fila de encabezados va justo debajo; puede haber una segunda linea
+        mapa, rr = {}, r + 1
+        while rr <= min(r + 4, max_fil):
+            m = _mapa_columnas(filas[rr])
+            if 'desc' in m and 'cant' in m:
+                mapa, r = m, rr
+                break
+            rr += 1
+        if not mapa:
+            r += 1
+            continue
+        items, rr = [], r + 1
+        while rr <= max_fil:
+            texto = ' '.join(clean(x) for x in filas[rr][1:]).upper().strip()
+            if texto.startswith(_FIN) or _seccion_en(filas[rr])[0]:
+                break
+            d = A(rr, mapa['desc'])
+            q = A(rr, mapa['cant'])
+            u = A(rr, mapa['uni']) if 'uni' in mapa else None
+            if not fila_vacia(d, q):
+                items.append({'desc': clean(d), 'uni': clean(u), 'cant': num(q)})
+            rr += 1
+        secs[sec] = items
+        r = rr
+
+    d = {'codigo': codigo, 'nombre': nombre, 'unidad': unidad,
+         'detalle': detalle, 'secs': secs}
+    d.update(pie(A, max_fil, max_col))
+    return d
+
+
+FORMATOS = {'A': formato_a, 'B': formato_b, 'C': formato_c,
+            'G': formato_generico}
 
 
 def detectar(ws):
