@@ -263,6 +263,17 @@ diferencias de formato y una cantidad de menos está para revisar, no en verde.
 tocar una coma y aun así bajar la cantidad de un rubro en el presupuesto. Si
 los dos archivos lo traen, compáralo siempre.
 
+**La celda impresa esconde decimales.** Excel imprime `0,0125` como `0,01` si la
+celda tiene formato de dos decimales, y en el PDF el resto ya no existe. Leído
+tal cual, eso sale como una cantidad menor que la referencia —grave— cuando el
+oferente no bajó nada. Se resuelve despejando: la fila es lineal en la cantidad
+(`cantidad x tarifa x rendimiento = costo`), así que el valor completo es el
+costo dividido para los demás factores, y solo se acepta si redondeado a los
+decimales impresos da exactamente la cifra impresa. `leer_pdf()` lo hace solo;
+`lector_pdf.cantidades_recuperadas()` devuelve la lista para anotarla en NOTAS.
+Si el oferente escribió `0,01` de verdad, el costo cuadra con `0,01` y no se
+toca nada.
+
 **El PDF no miente, pero se lee mal.** Estas plantillas imprimen la descripción
 larga en tres renglones —la cabeza arriba, las cifras en el del medio, la cola
 abajo—, y entre dos filas conviven la cola de una y la cabeza de la siguiente.

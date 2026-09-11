@@ -255,6 +255,19 @@ cantidades con cuatro decimales. Probar los dos y puntuar el resultado no avisa
 cuando se equivoca: con el separador cambiado, `0,0940` se lee `940` y el rubro
 entero sale mal sin que nada falle.
 
+**Decimales escondidos por el formato de celda.** En un caso real el rubro 35
+salió con `EQUIPO MEDICION Y COMPROB. ELECTRICA` en `0,01` frente a `0,0125` de
+la referencia, y el reporte lo marcó como cantidad menor. El Excel del oferente
+tenía `0,0125`: la celda solo mostraba dos decimales. La prueba estaba en la
+propia fila, porque el COSTO sí se calcula con el valor completo —
+`0,01 x 2,16 x 2,4056 = 0,0520`, pero el PDF imprime `0,0650`, que es justo
+`0,0125 x 2,16 x 2,4056`. `_cantidad_oculta()` despeja ese valor y lo acepta con
+dos candados: que redondeado a los decimales impresos dé la cifra impresa (así
+nunca cambia una cantidad, solo le devuelve precisión) y que el número despejado
+sea corto, de cuatro decimales como mucho. Si hicieran falta seis, lo que falla
+es la identificación de las columnas, y entonces no se toca nada: convertir un
+`0,1` legítimo en `0,09508` sería el error contrario.
+
 **DETALLE impreso encima de UNIDAD.** En el formato `ushay_vae` las dos celdas
 se superponen y el texto sale entrelazado. El preset lo declara con
 `detalle_fiable: False` (la especificación se vacía y la comparación la descarta

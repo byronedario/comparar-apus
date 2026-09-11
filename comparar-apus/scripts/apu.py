@@ -271,7 +271,11 @@ def tipo_texto(ref, ofe, pdf=False):
     x, y = nd(ref), nd(ofe)
     if x == y:
         return 'MENOR'
-    if pdf and x and y and len(y) > 25 and x.startswith(y):
+    # La celda impresa se queda sin sitio y corta la descripcion. Vale como
+    # truncamiento si lo que falta es la cola: o bien lo leido ya es largo, o
+    # bien lo que falta son dos o tres caracteres ("CAMION CISTERNA 13 TON.
+    # 10.000 L" por "... 10.000 LT.", que es exactamente lo que imprime el PDF).
+    if pdf and x and y and x.startswith(y) and (len(y) > 25 or len(x) - len(y) <= 3):
         return 'TEXTO CORTADO'
     return 'DIFERENCIA'
 

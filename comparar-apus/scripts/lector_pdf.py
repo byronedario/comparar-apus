@@ -87,6 +87,14 @@ def _cifras_finales(linea):
     return ' '.join(toks[:i]).strip(), nums
 
 
+def _decimales(token):
+    """Cuantos decimales trae IMPRESA una cifra. Es el dato que dice hasta donde
+    se puede confiar en ella: Excel imprime 0,0125 como "0,01" si la celda tiene
+    formato de dos decimales, y el PDF ya no guarda el resto."""
+    m = re.search(r'[.,](\d+)\s*%?$', (token or '').strip())
+    return len(m.group(1)) if m else 0
+
+
 def parse_pagina(txt, etiquetas, coma_decimal=True, modo='derecha'):
     """Un APU a partir del texto de una pagina.
 
@@ -218,10 +226,14 @@ def parse_pagina(txt, etiquetas, coma_decimal=True, modo='derecha'):
             if pend:
                 desc = clean(' '.join(pend) + ' ' + desc)
                 pend = []
-            cant = _f(toks[k], coma_decimal)
+            cifras = [_f(t, coma_decimal) for t in toks[k:]]
+            decs = [_decimales(t) for t in toks[k:]]
+            cant = cifras[0] if cifras else None
+            dec = decs[0] if decs else 0
             desc = clean(desc)
             if not fila_vacia(desc, cant):
-                secs[cur].append({'desc': desc, 'uni': clean(uni), 'cant': cant})
+                secs[cur].append({'desc': desc, 'uni': clean(uni), 'cant': cant,
+                                  'cifras': cifras, 'dec': dec, 'decs': decs})
             continue
 
         izq, nums = _cifras_finales(s)
@@ -257,10 +269,14 @@ def parse_pagina(txt, etiquetas, coma_decimal=True, modo='derecha'):
                     desc = clean(pref + ' ' + desc)
             else:
                 desc, uni = izq, ''
-        cant = _f(nums[0], coma_decimal)
+        cifras = [_f(x, coma_decimal) for x in nums]
+        decs = [_decimales(x) for x in nums]
+        cant = cifras[0] if cifras else None
+        dec = decs[0] if decs else 0
         desc = clean(desc)
         if not fila_vacia(desc, cant):
-            secs[cur].append({'desc': desc, 'uni': clean(uni), 'cant': cant})
+            secs[cur].append({'desc': desc, 'uni': clean(uni), 'cant': cant,
+                              'cifras': cifras, 'dec': dec, 'decs': decs})
 
     return {'n': num, 'codigo': '', 'nombre': nombre, 'unidad': unidad,
             'detalle': detalle, 'secs': secs}
@@ -280,6 +296,33 @@ FRAG = {'PESO', 'RELATI', 'VO', 'ELEME', 'NTO', 'ELEMENTO', 'PRE', 'CPC', 'VAE',
         'DESCRIPCION', 'CANTIDAD', 'TARIFA', 'UNIDAD', 'JORNAL/HR', 'RENDIMIENTO'}
 
 CODITEM = re.compile(r'^\s*[A-Za-z]{0,3}\d{1,5}[A-Za-z]?\s{2,}')
+
+
+def _pre_rubro_detalle(pagina):
+    """Normaliza una pagina del formato `rubro_detalle`.
+
+    A la derecha del APU hay un bloque de VAE (Peso Relativo, CPC, NP/EP/ND) y,
+    bajo el nombre de cada columna, un renglon con la FORMULA ("PE= D / CD",
+    "PMO= D / CD"). Ese renglon no trae cifras del APU, asi que el lector lo
+    tomaba como texto suelto y se lo pegaba al primer insumo de cada seccion:
+    "PE= D / CD CPC X Y(%) VE=PE * Y(%) HERRAMIENTA MANUAL". Eran 148 hallazgos
+    de descripcion, todos falsos.
+    """
+    out = []
+    for l in pagina.split('\n'):
+        # cabeceras de columna y renglones de formula: nombran las columnas, no
+        # son insumos. Se miran sobre la linea entera y ANTES de recortar nada,
+        # porque recortar parte la formula ("PM= D / CD" se queda en "PM= D") y
+        # entonces ya no se reconoce.
+        if re.match(r'\s*(DESCRIPCI[ÓO]N|CUADRILLA TIPO)\b', l) or \
+           re.search(r'\bP[EMOT]*\s*=\s*D\s*/\s*CD\b|VE\s*=\s*PE\b', l):
+            continue
+        # el rotulo de la seccion comparte renglon con la cabecera del bloque de
+        # VAE; el resto de las columnas no estorba, porque la cantidad se lee
+        # desde la descripcion hacia la derecha y no desde el final
+        i = l.find('Peso Relativo')
+        out.append(l[:i].rstrip() if i > 0 else l.rstrip())
+    return '\n'.join(out)
 
 
 def _pre_ushay(pagina):
@@ -465,6 +508,7 @@ ETIQUETAS = {
                       'detalle': None,
                       'ignorar': r'HOJA\b|CODIGO:|OFERENTE|PROYECTO|'
                                  r'AN[ÁA]LISIS|ANALISIS',
+                      'pre': _pre_rubro_detalle,
                       'coma_decimal': True, 'modo': 'izquierda'},
     # USHAY con las columnas del VAE a la derecha: "CODIGO DEL RUBRO: 4",
     # "NOMBRE DEL RUBRO:", "DETALLE:" impreso encima de "UNIDAD:"
@@ -621,7 +665,89 @@ def leer_pdf(ruta, etiquetas=None, coma_decimal=None, modo=None):
             if et.get('detalle_fiable') is False:
                 d['detalle'] = ''
             out[d['n']] = d
+    _recuperar_cantidades(out)
     return _completar_con_tabla(out, ruta)
+
+
+def _cantidad_oculta(cant, dec, cifras, decs=None, tol=0.02):
+    """Despeja del propio renglon los decimales que la celda no imprimio.
+
+    Excel imprime 0,0125 como "0,01" si la celda tiene formato de dos decimales,
+    pero el COSTO de la fila se calcula con el valor completo. Como la fila es
+    lineal en la cantidad (cantidad x tarifa x rendimiento = costo, o cantidad x
+    precio unitario = costo), el valor que falta se despeja: es el costo
+    dividido para el resto de los factores.
+
+    Solo se acepta el valor despejado si, redondeado a los decimales que SI se
+    imprimieron, da exactamente la cifra impresa. Asi esto nunca cambia una
+    cantidad: solo le devuelve los decimales que el formato de celda escondio.
+    Si el oferente escribio 0,01 de verdad, el costo cuadra con 0,01 y no pasa
+    nada.
+    """
+    if cant is None or not cant or dec is None or dec > 2 or len(cifras) < 3:
+        return None
+    for j in range(2, min(len(cifras), 6)):
+        medios = cifras[1:j]
+        if any(m is None or m <= 0 for m in medios) or cifras[j] is None:
+            return None if j == 2 else None
+        # una columna intermedia puede ser un calculo previo de la misma fila
+        # ("COSTO HORA" = cantidad x tarifa); multiplicarla contaria dos veces
+        util = [m for i, m in enumerate(medios)
+                if not (0 < i < len(medios) - 1 and abs(m - cant * medios[i - 1]) <= tol * max(1.0, abs(m)))]
+        c = 1.0
+        for m in util:
+            c *= m
+        if c <= 0:
+            continue
+        total = cifras[j]
+        if abs(cant * c - total) <= max(5e-5, abs(total) * 0.02):
+            return None                      # la cifra impresa ya cuadra
+        q = total / c
+        if q <= 0:
+            continue
+        if round(q, dec) != round(cant, dec) or abs(q - cant) <= 1e-9:
+            continue
+        # el costo tambien viene redondeado, asi que el despeje sale con ruido
+        # (0,01250939). Se devuelve el numero mas corto que sigue reproduciendo
+        # el costo impreso dentro de su propia precision: 0,0125.
+        dt = (decs[j] if decs and j < len(decs) and decs[j] else 4)
+        margen = 0.5 * 10 ** (-dt) + 1e-9
+        # Y solo se acepta si ese numero es CORTO. Una cantidad de obra se
+        # escribe con cuatro decimales como mucho; si hacen falta seis para
+        # reproducir el costo, lo que falla es la identificacion de las columnas
+        # y no el formato de la celda, y mas vale no tocar nada: inventar
+        # 0,09508 donde el oferente puso 0,1 seria el error contrario.
+        for k in range(dec + 1, 5):
+            qk = round(q, k)
+            if qk > 0 and abs(qk * c - total) <= margen:
+                return qk
+        return None
+    return None
+
+
+def _recuperar_cantidades(apus):
+    """Aplica `_cantidad_oculta` a todos los items. Devuelve cuantos recupero."""
+    n = 0
+    for d in apus.values():
+        for filas in d['secs'].values():
+            for it in filas:
+                q = _cantidad_oculta(it.get('cant'), it.get('dec'),
+                                     it.get('cifras') or [], it.get('decs'))
+                if q is not None:
+                    it['cant_impresa'], it['cant'] = it['cant'], q
+                    n += 1
+    return n
+
+
+def cantidades_recuperadas(apus):
+    """[(rubro, seccion, descripcion, impresa, recuperada)] de lo que se despejo."""
+    out = []
+    for n in sorted(apus):
+        for sec, filas in apus[n]['secs'].items():
+            for it in filas:
+                if 'cant_impresa' in it:
+                    out.append((n, sec, it['desc'], it['cant_impresa'], it['cant']))
+    return out
 
 
 def _unidad_plausible(u):
