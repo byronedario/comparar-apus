@@ -241,81 +241,9 @@ def leer_libro(ruta, hojas, formato=None):
     return formato, {n: fn(wb[hojas[n]]) for n in orden}
 
 
-# ---------------------------------------------------------------------------
-# Presupuesto
-# ---------------------------------------------------------------------------
-# El APU dice como se compone un rubro; el presupuesto dice cuanto de ese rubro
-# se ejecuta, que es lo que de verdad se paga. Los encabezados cambian de un
-# archivo a otro ("DESCRIPCION DEL RUBRO", "RUBRO / D E S C R I P C I O N",
-# "PRECIO UNITARIO DEL RUBRO", "PRECIO UNITARIO OFERTADO"), asi que las columnas
-# se ubican por lo que dice su encabezado y no por su posicion.
-
-CAMPOS_PRES = [
-    ('cant',  r'CANTIDAD'),
-    ('uni',   r'UNIDAD'),
-    ('punit', r'PRECIO\s+UNITARIO|P\.?\s*UNITARIO'),
-    ('total', r'PRECIO\s+GLOBAL|PRECIO\s+TOTAL|TOTAL'),
-    ('desc',  r'RUBRO|DESCRIPCI[ÓO]N'),
-]
-
-
-def _cabecera_presupuesto(A, max_fil=40, max_col=14):
-    """(fila del encabezado, {campo: columna}). None si la hoja no lo trae."""
-    for r in range(1, max_fil + 1):
-        cols, txt = {}, {}
-        for c in range(1, max_col + 1):
-            t = clean(A(r, c)).upper()
-            if t:
-                txt[c] = re.sub(r'\s+', ' ', t)
-        if not any(re.search(r'CANTIDAD', t) for t in txt.values()):
-            continue
-        for campo, pat in CAMPOS_PRES:
-            for c, t in sorted(txt.items()):
-                if c in cols.values():
-                    continue
-                # "DESCRIPCION DEL CPC" y el codigo no son la descripcion del rubro
-                if campo == 'desc' and re.search(r'CPC|C[ÓO]DIGO', t):
-                    continue
-                if re.search(pat, t):
-                    cols[campo] = c
-                    break
-        if 'cant' in cols and 'desc' in cols:
-            return r, cols
-    return None, None
-
 
 def leer_presupuesto(ruta, hoja=None):
-    """{n: {desc, uni, cant, punit, total}} de la hoja de presupuesto.
-
-    Devuelve {} si el archivo no trae presupuesto, que es lo normal cuando la
-    oferta llega solo con los APUs impresos.
-    """
-    import openpyxl
-    if not re.search(r'\.xls[xm]?$', str(ruta), re.I):
-        return {}                                # una oferta impresa en PDF no lo trae
-    wb = openpyxl.load_workbook(ruta, read_only=True, data_only=True)
-    hojas = [hoja] if hoja else [s for s in wb.sheetnames
-                                 if re.search(r'PRESUP|PRES[_\s-]', s, re.I)]
-    for h in hojas:
-        ws = wb[h]
-        g = grid(ws, min(ws.max_row or 400, 400), 14)
-        A = lambda r, c: g[r][c]
-        r0, cols = _cabecera_presupuesto(A)
-        if not cols:
-            continue
-        out, n = {}, 0
-        for r in range(r0 + 1, min(ws.max_row or 400, 400) + 1):
-            desc, cant = clean(A(r, cols['desc'])), num(A(r, cols['cant']))
-            # los titulos de capitulo ("PRELIMINARES") no traen cantidad
-            if not desc or cant is None:
-                continue
-            n += 1
-            out[n] = {'desc': desc,
-                      'uni': clean(A(r, cols['uni'])) if 'uni' in cols else '',
-                      'cant': cant,
-                      'punit': num(A(r, cols['punit'])) if 'punit' in cols else None,
-                      'total': num(A(r, cols['total'])) if 'total' in cols else None,
-                      'hoja': h, 'fila': r}
-        if out:
-            return out
-    return {}
+    """{n: item} del presupuesto. Delega en presupuesto.py, que mapea las
+    columnas por su nombre; aqui solo se conserva el nombre historico."""
+    import presupuesto
+    return presupuesto.leer(ruta, hoja)[0]

@@ -123,9 +123,16 @@ import lectores, lector_pdf
 
 formato, ref = lectores.leer_libro('referencia.xlsx', {i: str(i) for i in range(1, N+1)})
 ofe = lector_pdf.leer_pdf('oferta.pdf')      # detecta preset, decimal y modo
-pres_ref = lectores.leer_presupuesto('referencia.xlsx')   # {} si no lo trae
-pres_ofe = lectores.leer_presupuesto('oferta.xlsx')
+
+import presupuesto
+pres_ref, hoja_r = presupuesto.leer('referencia.xlsx')    # ({}, None) si no lo trae
+pres_ofe, hoja_o = presupuesto.leer('oferta.xlsx')
 ```
+
+Hay un atajo para todo esto: `scripts/probar.py referencia oferta salida.xlsx`
+hace la lectura, valida la correspondencia y el enlace del presupuesto, genera
+el reporte e imprime lo que hay que mirar. Es la forma rapida de empezar con un
+par de archivos nuevos.
 
 `references/formatos.md` describe los tres formatos de Excel y los tres de PDF
 ya resueltos, y cómo agregar el tuyo si la autodetección falla.
@@ -145,8 +152,7 @@ apu.reporte(ref, ofe, '/ruta/Comparacion APUs X vs Oferta Y.xlsx',
             titulo_ofe='oferta.pdf  -  137 páginas, una por rubro',
             correspondencia='Hoja N <-> página N. Verificada en las 137.',
             pres_ref=pres_ref, pres_ofe=pres_ofe,
-            pdf=True,                      # activa TEXTO CORTADO
-            nomenclatura_mo_menor=True)    # solo si viste el patrón
+            pdf=True)                      # activa TEXTO CORTADO
 ```
 
 Sale con cinco hojas: **RESUMEN** (semáforo por rubro), **DIFERENCIAS** (todo),
@@ -154,9 +160,37 @@ Sale con cinco hojas: **RESUMEN** (semáforo por rubro), **DIFERENCIAS** (todo),
 corregir) y **NOTAS** (el criterio aplicado, para que el reporte se defienda
 solo).
 
-`comparar_detalle` se decide solo: si la oferta trae la especificación en blanco
-en casi todos los rubros, no se compara y se dice en las notas. Pregúntale al
-usuario únicamente si quiere apartarse del criterio por defecto.
+**Las hojas están enlazadas por fórmulas, y eso es deliberado.** El revisor y su
+equipo repasan DIFERENCIAS y reclasifican a mano lo que para ellos no es un
+error de fondo — `CEMENTO` frente a `CEMENTO PORTLAND TIPO 1`, por ejemplo. Para
+que esa decisión valga algo, la hoja trae `TIPO DETECTADO` (gris, lo que
+encontró el análisis, queda de respaldo), `TIPO REVISADO` (editable, con lista
+desplegable) y una columna de `OBSERVACION`. Al cambiar el tipo revisado se
+recalculan los conteos del RESUMEN, el estado del rubro, los colores —son
+formato condicional, no relleno fijo— y la hoja SOLO ERRORES, sin volver a
+generar nada.
+
+El enlace entre hojas se hace con `COUNTIFS` e `INDEX/MATCH`, no con fórmulas
+de matriz dinámica: `FILTER` habría sido más corto, pero openpyxl no sabe
+escribirlas y Excel las borra al abrir el archivo, avisando de que "reparó" el
+libro. Así funciona en cualquier versión. `apu.reporte_estatico()` queda para
+cuando se quiera un archivo sin ninguna fórmula.
+
+Otro detalle que cuesta media hora descubrir: los colores son formato
+condicional, y en un formato diferencial Excel pinta el fondo con `bgColor`. El
+`fgColor` que sirve en una celda normal ahí se ignora y la regla se aplica sin
+que se vea nada.
+
+El RESUMEN incorpora además, cuando hay presupuestos, la cantidad de obra de
+cada uno y el precio unitario del APU de la oferta contra el de su propio
+presupuesto. Son dos verificaciones que el APU por sí solo no permite.
+
+Tres decisiones se toman solas y no hace falta preguntarlas: si comparar el
+detalle (se descarta cuando la oferta lo trae en blanco en casi todos los
+rubros), y las dos banderas de nomenclatura de mano de obra y unidades
+equivalentes, que se activan cuando el patrón aparece en la mayoría de los casos
+y no en dos sueltos. Todas quedan anotadas en NOTAS. Pásalas a mano solo para
+apartarte del criterio.
 
 ### 5. Verificar y reportar
 
@@ -181,13 +215,18 @@ no le quitan el sueño.
 | `TEXTO CORTADO` | El PDF truncó el texto al imprimir | azul |
 | `ORDEN` | Mismos ítems en distinto orden | azul |
 
-Dos banderas de `apu.comparar()` se activan solo cuando detectes el patrón:
+Dos banderas de `apu.comparar()` se detectan solas, porque responden a una
+decisión de forma que el oferente tomó una vez y repitió en todo el documento:
 
-- `nomenclatura_mo_menor=True` — el oferente renombró toda la mano de obra
-  manteniendo el código ocupacional.
-- `unidades_equivalentes_menor=True` — abrevia las unidades de otra forma
-  (`galón` → `Gln`, `l` → `Ltr`). Un cambio real de unidad (`Kg` → `u`) se
-  sigue reportando como grave.
+- `nomenclatura_mo_menor` — renombró toda la mano de obra manteniendo el código
+  ocupacional.
+- `unidades_equivalentes_menor` — abrevia las unidades de otra forma (`galón` →
+  `Gln`, `l` → `Ltr`). Un cambio real de unidad (`Kg` → `u`) se sigue
+  reportando como grave.
+
+`detectar_patrones()` las activa cuando el patrón explica la mayoría de las
+diferencias de su tipo, nunca por dos casos sueltos: dos ítems con el mismo
+código ocupacional pueden ser casualidad, treinta son una decisión.
 
 ## Lo que cuesta caro si se pasa por alto
 

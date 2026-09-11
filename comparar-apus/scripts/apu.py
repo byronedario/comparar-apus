@@ -359,8 +359,41 @@ def detalle_comparable(ref, ofe, umbral=0.8):
     return vacios / len(con_ref) < umbral
 
 
+def detectar_patrones(ref, ofe):
+    """(nomenclatura_mo_menor, unidades_equivalentes_menor) mirando la oferta.
+
+    Las dos banderas responden a una decision de forma que el oferente tomo una
+    vez y repitio en todo el documento: reescribir la nomenclatura de la mano de
+    obra, o abreviar las unidades a su manera. Se detectan igual que las veria
+    una persona -- si la mayoria de las diferencias de ese tipo son del patron y
+    no casos sueltos -- y asi no hay que adivinarlas rubro por rubro.
+
+    Un caso aislado NO activa la bandera: dos items con el mismo codigo
+    ocupacional pueden ser un renombrado, pero treinta ya son una decision.
+    """
+    mo_total = mo_patron = un_total = un_patron = 0
+    for n in ref:
+        O = ofe.get(n)
+        if O is None:
+            continue
+        for sec in SECS:
+            for ia, ib, _, _ in emparejar(ref[n]['secs'].get(sec, []),
+                                          O['secs'].get(sec, []), sec):
+                if ia is None or ib is None:
+                    continue
+                if sec == 'MANO DE OBRA' and nd(ia['desc']) != nd(ib['desc']):
+                    mo_total += 1
+                    ca, cb = cod_ocupacional(ia['desc']), cod_ocupacional(ib['desc'])
+                    mo_patron += bool(ca and ca == cb)
+                if sec in ('MATERIALES', 'TRANSPORTE') and nd(ia['uni']) != nd(ib['uni']):
+                    un_total += 1
+                    un_patron += bool(misma_unidad(ia['uni'], ib['uni']))
+    sistematico = lambda p, t: t >= 5 and p >= 0.6 * t
+    return sistematico(mo_patron, mo_total), sistematico(un_patron, un_total)
+
+
 def comparar(ref, ofe, pdf=False, comparar_detalle=None, comparar_indirectos=True,
-             nomenclatura_mo_menor=False, unidades_equivalentes_menor=False):
+             nomenclatura_mo_menor=None, unidades_equivalentes_menor=None):
     """Compara dos diccionarios {n: apu} y devuelve (filas, resumen).
 
     pdf                          la oferta viene de un PDF: activa TEXTO CORTADO.
@@ -369,15 +402,22 @@ def comparar(ref, ofe, pdf=False, comparar_detalle=None, comparar_indirectos=Tru
     comparar_indirectos          compara el margen de cada rubro contra la
                                  tolerancia de 5 puntos. Ponlo en False solo si
                                  el lector no pudo sacar el pie del APU.
-    nomenclatura_mo_menor        True si el oferente renombro sistematicamente la
-                                 mano de obra manteniendo el codigo ocupacional.
-    unidades_equivalentes_menor  True si abrevia las unidades de otra forma
-                                 (galon -> Gln). Ojo: un cambio real de unidad
-                                 (Kg -> u) se sigue reportando como DIFERENCIA.
+    nomenclatura_mo_menor        el oferente renombro sistematicamente la mano de
+                                 obra manteniendo el codigo ocupacional. None lo
+                                 detecta solo.
+    unidades_equivalentes_menor  abrevia las unidades de otra forma (galon ->
+                                 Gln). None lo detecta solo. Ojo: un cambio real
+                                 de unidad (Kg -> u) se sigue reportando grave.
     """
     filas, resumen = [], []
     if comparar_detalle is None:
         comparar_detalle = detalle_comparable(ref, ofe)
+    if nomenclatura_mo_menor is None or unidades_equivalentes_menor is None:
+        mo, un = detectar_patrones(ref, ofe)
+        if nomenclatura_mo_menor is None:
+            nomenclatura_mo_menor = mo
+        if unidades_equivalentes_menor is None:
+            unidades_equivalentes_menor = un
 
     for n in sorted(ref):
         S = ref[n]
@@ -388,7 +428,7 @@ def comparar(ref, ofe, pdf=False, comparar_detalle=None, comparar_indirectos=Tru
                           'RUBRO AUSENTE', 'existe en la referencia',
                           'no esta en la oferta', 'DIFERENCIA'])
             resumen.append([n, S.get('codigo', ''), S['nombre'], '',
-                            S['unidad'], '', 1, 0, 0, 0, 'REVISAR'])
+                            S['unidad'], '', 1, 0, 0, 0, 'REVISAR', None])
             continue
 
         def add(sec, item, campo, vs, vo, k):
@@ -456,8 +496,11 @@ def comparar(ref, ofe, pdf=False, comparar_detalle=None, comparar_indirectos=Tru
         cor = sum(1 for r in mias if r[-1] in ('TEXTO CORTADO', 'REDONDEO'))
         estado = ('REVISAR' if dif else 'ORDEN / TEXTO CORTADO' if (orn or cor)
                   else 'OBSERVACION MENOR' if men else 'OK')
+        # el ultimo campo es el precio unitario que sale del APU de la oferta;
+        # el reporte lo contrasta con el de su propio presupuesto
         resumen.append([n, S.get('codigo', ''), S['nombre'], O['nombre'],
-                        S['unidad'], O['unidad'], dif, cor, men, orn, estado])
+                        S['unidad'], O['unidad'], dif, cor, men, orn, estado,
+                        num(O.get('precio'))])
 
     if comparar_indirectos:
         filas += _filas_indirectos(ref, ofe)
@@ -550,7 +593,24 @@ def comparar_presupuesto(pa, pb, ofe=None, tol=0.005):
 
 def reporte(ref, ofe, salida, titulo_ref='', titulo_ofe='', correspondencia='',
             notas_extra=(), pres_ref=None, pres_ofe=None, **kw):
-    """Compara y escribe el Excel. kw se pasan tal cual a comparar().
+    """Compara y escribe el Excel con las hojas enlazadas por formulas.
+
+    El equipo reclasifica en la hoja DIFERENCIAS y el RESUMEN, los colores y
+    SOLO ERRORES se recalculan solos. Devuelve (filas, resumen) para armar el
+    resumen del chat. Para Excel anterior a 2021 usa reporte_estatico().
+    """
+    import reporte as reporte_mod
+    filas, resumen = comparar(ref, ofe, **kw)
+    fpres = comparar_presupuesto(pres_ref, pres_ofe, ofe) if pres_ref and pres_ofe else []
+    reporte_mod.generar(salida, filas, resumen, fpres, pres_ref, pres_ofe,
+                        titulo_ref, titulo_ofe, correspondencia, notas_extra,
+                        TOLERANCIA_INDIRECTOS)
+    return filas, resumen
+
+
+def reporte_estatico(ref, ofe, salida, titulo_ref='', titulo_ofe='', correspondencia='',
+                     notas_extra=(), pres_ref=None, pres_ofe=None, **kw):
+    """Compara y escribe el Excel con los conteos fijos. kw se pasan tal cual a comparar().
 
     pres_ref / pres_ofe: los dos presupuestos, si se pudieron leer. Agregan la
     hoja PRESUPUESTO y sus hallazgos entran en SOLO ERRORES como los demas.
