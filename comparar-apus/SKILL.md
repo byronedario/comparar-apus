@@ -139,7 +139,10 @@ pres_ofe, hoja_o = presupuesto.leer('oferta.pdf')         # el PDF tambien vale
 
 `presupuesto.leer()` acepta `.xlsx` y `.pdf`; con un PDF se apoya en
 `tabla_pdf`, que lee la tabla por celdas y comprueba cada fila con su propia
-aritmética. `tabla_pdf.inconsistentes(pres)` devuelve los rubros en los que
+aritmética. La lectura por celdas necesita `pdfplumber`
+(`pip install pdfplumber --break-system-packages` si no está); sin él,
+`tabla_pdf` cae solo al modo por espacios, que es el que produce los hallazgos
+falsos, así que instálalo antes de leer un presupuesto en PDF. `tabla_pdf.inconsistentes(pres)` devuelve los rubros en los que
 cantidad x precio unitario no da el precio total: son los que hay que mirar a
 mano antes de creerse nada de esa tabla.
 
