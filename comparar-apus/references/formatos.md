@@ -181,10 +181,85 @@ indirectos y precio total, que es lo que necesita `apu.margen()`. Dos trampas:
 - El importe es la **primera** cifra de la fila, no la última: varias plantillas
   cierran con una columna de porcentaje (el `100` del costo directo) y tomar la
   última devuelve ese 100 en vez del dinero.
-- El porcentaje aparece de tres formas: dentro del rótulo
-  (`COSTO INDIRECTO ( 20.0000 % )`), pegado a él (`COSTOS INDIRECTOS 7.8%`), o
-  **en el renglón siguiente** cuando la celda está centrada verticalmente. Por
-  eso se mira hasta dos renglones más abajo.
+- El porcentaje aparece de cuatro formas: dentro del rótulo
+  (`COSTO INDIRECTO ( 20.0000 % )`), pegado a él (`COSTOS INDIRECTOS 7.8%`),
+  **en el renglón siguiente** cuando la celda está centrada verticalmente (por
+  eso se mira hasta dos renglones más abajo), y **sin el signo `%`**
+  (`COSTO INDIRECTO    17,00    0,2732`). En ese último caso cuál de las dos
+  cifras es el porcentaje no se adivina: se comprueba cuál, aplicada al costo
+  directo, da la otra.
+
+  Que el porcentaje se lea importa más de lo que parece. Cuando no está,
+  `apu.margen()` lo deduce del precio, que viene redondeado a dos decimales, y
+  un rubro barato sale desviado: con costo directo `0,0574` y precio `0,07` el
+  margen calculado es 21,95 % cuando el declarado es 17 %. Una sola decisión del
+  oferente se convierte así en un hallazgo falso.
+
+## PDF: lo que rompe la lectura y cómo se resuelve
+
+Los tres formatos de PDF de arriba se leen con `pdftotext -layout`, que conserva
+las columnas como espacios. Eso alcanza para las páginas de APU, pero **no para
+la tabla de rubros** (presupuesto, tabla de cantidades y precios, oferta
+económica), que va por `scripts/tabla_pdf.py`. Estas son las trampas, todas
+vistas en archivos reales del mismo proceso:
+
+**La descripción se imprime en tres renglones.** Cabeza arriba, cifras en el del
+medio, cola abajo. Entre dos filas de cifras conviven la cola de una y la cabeza
+de la siguiente, y por columnas de texto no hay forma de saber cuál es cuál:
+
+```
+   MALLA NYLON ALTO IMPACTO COLOR VERDE          <- cabeza del 75
+75 ROMBO 5cm, RESISTENTE A LA INTEMPERIE CON m2 3800 2,52 ...
+   PROTECCIÓN UV.                                <- cola del 75
+   DESALOJO EQUIPO PESADO TIERRA/ESCOMBROS       <- cabeza del 76
+76                                           m3  300 6,68 ...
+```
+
+Sin tratar, el 75 pierde la cabeza y el 76 hereda la cola. La salida es leer por
+**celdas** con pdfplumber, que devuelve los tres renglones ya unidos: estas
+tablas están rayadas y las líneas son datos reales del PDF, no una suposición.
+
+**La celda se desborda.** Cuando el texto no cabe, pdfplumber lo corta a media
+palabra y le entrega el sobrante a la columna vecina: la unidad deja de parecer
+una unidad (`A INTEmM2PERIE` es `A LA INTEMPERIE` y `m2` impresos uno encima del
+otro). Por eso `tabla_pdf.leer()` lee también por espacios y cruza las dos
+lecturas fila por fila.
+
+**El árbitro es la aritmética de la fila.** Cantidad x precio unitario = precio
+total. Una fila mal leída casi nunca cuadra y una bien leída casi siempre, así
+que no hay que elegir lector a ciegas: se elige por fila. Lo que sigue sin
+cuadrar lo devuelve `tabla_pdf.inconsistentes()` para mirarlo a mano.
+
+**La firma electrónica se imprime ENCIMA de la tabla.** No al final: sus
+renglones aterrizan dentro de las filas. En un caso real el rubro 77 salió como
+`SOBREACARREO DE ESCOMBROS, TIERRA DE NARVAEZ EXCAVACIÓN Y MAT. PETREOS.`, con
+el apellido del firmante metido en medio; en otro, el bloque de firmas de la
+última página aportó tres ítems de TRANSPORTE al rubro 78. `lector_pdf.FIRMA` y
+`tabla_pdf.FIRMA` los quitan, junto con el nombre suelto que dejan debajo.
+
+**El mismo documento repite los rubros.** Después del presupuesto suelen venir
+la tabla del VAE y la desagregación tecnológica, con los mismos 78 rubros y
+otras columnas. Manda la **primera** aparición; si no, la segunda tabla pisa la
+buena.
+
+**Un PDF de APUs no es un presupuesto.** Cada sección de un APU también tiene
+descripción, cantidad y un total, así que el mismo lector devuelve una tabla de
+rubros inventada con los insumos. `tabla_pdf` exige que la cabecera nombre el
+NÚMERO de ítem, que la numeración vaya del 1 al N casi sin huecos y que la
+mayoría de las filas cuadren; si no, devuelve `{}`.
+
+**El separador decimal no se adivina, se cuenta.** Un grupo de miles tiene
+exactamente tres dígitos, así que una coma o un punto seguidos de **cuatro**
+dígitos son el decimal sin discusión, y las plantillas de APU imprimen las
+cantidades con cuatro decimales. Probar los dos y puntuar el resultado no avisa
+cuando se equivoca: con el separador cambiado, `0,0940` se lee `940` y el rubro
+entero sale mal sin que nada falle.
+
+**DETALLE impreso encima de UNIDAD.** En el formato `ushay_vae` las dos celdas
+se superponen y el texto sale entrelazado. El preset lo declara con
+`detalle_fiable: False` (la especificación se vacía y la comparación la descarta
+sola) y la unidad del rubro se rellena desde la tabla de cantidades del mismo
+documento.
 
 ## Cómo agregar un formato nuevo
 

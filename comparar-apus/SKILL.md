@@ -86,6 +86,14 @@ print(len(wb.sheetnames)); print(wb.sheetnames[:25]); print(wb.sheetnames[-8:])"
 Para PDF: `pdfinfo archivo.pdf | grep Pages`. No hace falta OCR: son Excel
 impresos y traen texto real.
 
+**Si el mismo dato viene en Excel y en PDF, usa el Excel.** El oferente entrega
+lo que quiere y a menudo manda las dos cosas; la carpeta del contratante casi
+siempre tiene el presupuesto en `.xlsx` además del PDF del portal. El Excel
+trae el valor de cada celda y el PDF trae un dibujo de esa celda: no hay pelea
+posible. Y **la referencia también se lee mal**: en una revisión real, tres de
+las siete observaciones rojas venían de haber leído el presupuesto referencial
+en PDF (`e=15cm` por `e=5cm`, `70` por `9`, `250` por `225`), no de la oferta.
+
 Cuenta las hojas con cuidado. Un libro puede traer **dos juegos de APUs**: uno
 antiguo (`Rubro1`…`Rubro190`) y el vigente (`1`…`195`), más hojas de apoyo. Si
 el total no cuadra con el número de rubros, busca el segundo juego antes de
@@ -126,8 +134,14 @@ ofe = lector_pdf.leer_pdf('oferta.pdf')      # detecta preset, decimal y modo
 
 import presupuesto
 pres_ref, hoja_r = presupuesto.leer('referencia.xlsx')    # ({}, None) si no lo trae
-pres_ofe, hoja_o = presupuesto.leer('oferta.xlsx')
+pres_ofe, hoja_o = presupuesto.leer('oferta.pdf')         # el PDF tambien vale
 ```
+
+`presupuesto.leer()` acepta `.xlsx` y `.pdf`; con un PDF se apoya en
+`tabla_pdf`, que lee la tabla por celdas y comprueba cada fila con su propia
+aritmética. `tabla_pdf.inconsistentes(pres)` devuelve los rubros en los que
+cantidad x precio unitario no da el precio total: son los que hay que mirar a
+mano antes de creerse nada de esa tabla.
 
 Hay un atajo para todo esto: `scripts/probar.py referencia oferta salida.xlsx`
 hace la lectura, valida la correspondencia y el enlace del presupuesto, genera
@@ -246,10 +260,25 @@ diferencias de formato y una cantidad de menos está para revisar, no en verde.
 tocar una coma y aun así bajar la cantidad de un rubro en el presupuesto. Si
 los dos archivos lo traen, compáralo siempre.
 
+**El PDF no miente, pero se lee mal.** Estas plantillas imprimen la descripción
+larga en tres renglones —la cabeza arriba, las cifras en el del medio, la cola
+abajo—, y entre dos filas conviven la cola de una y la cabeza de la siguiente.
+Leído por columnas de espacios, el rubro se queda con el trozo del medio y el
+vecino hereda lo que sobra; la firma electrónica, que se imprime *encima* de la
+tabla, mete el apellido del firmante dentro de un rubro. Los lectores ya traen
+esto resuelto —celdas con pdfplumber, cruce con la lectura por espacios, filtro
+de firmas—, pero el criterio que hay detrás es el que importa cuando aparezca
+una plantilla nueva: **una diferencia que sólo afecta al texto, en un documento
+que viene de un PDF, es del lector hasta que se demuestre lo contrario.** Ábrela
+contra el original antes de reportarla. La forma barata de demostrarlo es la
+aritmética de la fila y el subtotal del rubro: lo que no cuadra está mal leído.
+
 ## Si el formato no encaja
 
 Copia de `scripts/lectores.py` la función más parecida y ajusta el mapa de
 columnas; son unas quince líneas. Para PDF, agrega un preset a
-`lector_pdf.ETIQUETAS` con su `pre`, `coma_decimal` y `modo`.
+`lector_pdf.ETIQUETAS` con su `pre`, `coma_decimal` y `modo` —y `detalle_fiable:
+False` si la plantilla imprime la celda DETALLE encima de la de UNIDAD, para que
+la comparación no invente diferencias de especificación.
 `references/formatos.md` tiene el detalle de cada formato resuelto y sus
 trampas.
