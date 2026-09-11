@@ -23,14 +23,16 @@ from apu import clean, num, grid, sin_tildes
 COLUMNAS = {
     'n':      (r'^ITEM$', r'^ITEM ?N', r'^N[°º]?$', r'^NO\.?$', r'^NUMERO',
                r'^RUBRO ?N'),
-    'codigo': (r'^C[ÓO]DIGO', r'^COD'),
-    'desc':   (r'^DESCRIPCI[ÓO]N', r'^RUBRO', r'^DETALLE'),
+    'codigo': (r'^CODIGO', r'^COD'),
+    'desc':   (r'^DESCRIPCION', r'^RUBRO', r'^DETALLE'),
     'uni':    (r'^UNIDAD', r'^UND$', r'^U\.?$'),
     'cant':   (r'^CANTIDAD', r'^CANT'),
-    'punit':  (r'^PRECIO ?UNITARIO', r'^P\.? ?UNITARIO', r'^V\.? ?UNITARIO',
+    # "PRECIO UNITARIO" y "PRECIO TOTAL" empiezan igual: el unitario exige la
+    # palabra completa para no quedarse tambien con la columna del total
+    'punit':  (r'^PREC\w* ?UNITARIO', r'^P\.? ?UNITARIO', r'^V\.? ?UNITARIO',
                r'^PRECIO$'),
     'total':  (r'^PRECIO ?GLOBAL', r'^SUBTOTAL', r'^TOTAL', r'^VALOR ?TOTAL',
-               r'^PRECIO ?TOTAL'),
+               r'^PREC\w* ?TOTAL'),
 }
 
 
@@ -43,7 +45,9 @@ def _cual(texto):
         return None
     for campo, patrones in COLUMNAS.items():
         for p in patrones:
-            if re.match(sin_tildes(p), t):
+            # el patron NO pasa por sin_tildes: .upper() convertiria \w en \W
+            # y la columna dejaria de reconocerse en silencio
+            if re.match(p, t):
                 return campo
     return None
 
@@ -126,9 +130,15 @@ def buscar_hoja(ruta):
 def leer(ruta, hoja=None):
     """({n: item}, nombre_de_hoja). Autodetecta la hoja si no se indica.
 
-    Un PDF no trae presupuesto, asi que se devuelve vacio sin error.
+    Si la ruta es un PDF, la tabla se saca con `tabla_pdf`, que lee por celdas
+    y comprueba cada fila con su propia aritmetica. El presupuesto en PDF es la
+    fuente mas fragil que maneja la skill: si existe el mismo dato en Excel, usa
+    el Excel.
     """
     import openpyxl
+    if re.search(r'\.pdf$', str(ruta), re.I):
+        import tabla_pdf
+        return tabla_pdf.leer(ruta), 'PDF'
     if not re.search(r'\.xls[xm]?$', str(ruta), re.I):
         return {}, None
     hoja = hoja or buscar_hoja(ruta)

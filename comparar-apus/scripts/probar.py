@@ -79,6 +79,18 @@ def main(ref_path, ofe_path, salida=None):
     print('presupuesto -> referencia: %r (%d items) | oferta: %r (%d items)'
           % (hp_ref, len(pref), hp_ofe, len(pofe)))
 
+    # el presupuesto leido de un PDF se comprueba solo: cantidad x precio
+    # unitario tiene que dar el precio total de la fila
+    import tabla_pdf
+    for etiq, hoja, pres in (('referencia', hp_ref, pref), ('oferta', hp_ofe, pofe)):
+        if hoja == 'PDF' and pres:
+            malas = tabla_pdf.inconsistentes(pres)
+            print('   %s leida del PDF: %d filas, %d sin cuadrar %s'
+                  % (etiq, len(pres), len(malas), malas[:10]))
+            if malas:
+                print('     !! revisa esos rubros a mano; si el mismo dato existe'
+                      ' en Excel, usa el Excel')
+
     # el enlace del presupuesto se valida contra el nombre del rubro del APU
     for etiq, pres in (('referencia', pref), ('oferta', pofe)):
         if not pres:
@@ -99,8 +111,11 @@ def main(ref_path, ofe_path, salida=None):
               else (' OK' if abs(va - vp) < 0.005 else '  <-- NO CUADRA'))
         print('   %-4s APU=%-10s presupuesto=%-10s%s' % (n, va, vp, ok))
 
-    print('indirectos -> referencia: %s | oferta: %s'
-          % (apu.margen(ref[comunes[0]]), apu.margen(ofe[comunes[0]])))
+    decl = lambda d: sum(1 for n in d if d[n].get('indirecto_pct') is not None)
+    print('indirectos -> referencia: %s | oferta: %s  (declarados: %d/%d y %d/%d;'
+          ' los no declarados se deducen del precio redondeado y mueven decimas)'
+          % (apu.margen(ref[comunes[0]]), apu.margen(ofe[comunes[0]]),
+             decl(ref), len(ref), decl(ofe), len(ofe)))
 
     # con la oferta impresa en PDF se activa TEXTO CORTADO: sin eso, la
     # especificacion que la celda impresa no alcanzo a mostrar se reporta como

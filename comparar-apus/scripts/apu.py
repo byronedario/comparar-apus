@@ -545,10 +545,14 @@ def _filas_indirectos(ref, ofe):
 # unitario del presupuesto de la oferta sea el que sale de su propio APU: si no
 # cuadran, uno de los dos documentos no es el que el oferente va a ejecutar.
 
-def comparar_presupuesto(pa, pb, ofe=None, tol=0.005):
+def comparar_presupuesto(pa, pb, ofe=None, tol=0.005, pdf=False):
     """Compara dos presupuestos {n: {desc, uni, cant, punit, total}}.
 
     ofe: los APUs de la oferta, para cruzar el precio unitario. Opcional.
+    pdf: alguno de los dos presupuestos se leyo de un PDF. Lo unico que cambia
+         es que una descripcion truncada al imprimir deja de ser DIFERENCIA y
+         pasa a TEXTO CORTADO; sin esto, el recorte del PDF llena la hoja
+         PRESUPUESTO de rojo y tapa los hallazgos de verdad.
     """
     filas = []
 
@@ -564,9 +568,15 @@ def comparar_presupuesto(pa, pb, ofe=None, tol=0.005):
             continue
 
         add(n, A['desc'], 'DESCRIPCION DEL RUBRO', A['desc'], B['desc'],
-            tipo_texto(A['desc'], B['desc']))
-        add(n, A['desc'], 'UNIDAD DEL RUBRO', A['uni'], B['uni'],
-            None if misma_unidad(A['uni'], B['uni']) else 'DIFERENCIA')
+            tipo_texto(A['desc'], B['desc'], pdf))
+        # la unidad vacia en un PDF no es un cambio de unidad: es una celda que
+        # el lector no pudo separar de la descripcion que se desbordo encima
+        if pdf and not clean(B['uni']):
+            add(n, A['desc'], 'UNIDAD DEL RUBRO', A['uni'], '',
+                'TEXTO CORTADO' if clean(A['uni']) else None)
+        else:
+            add(n, A['desc'], 'UNIDAD DEL RUBRO', A['uni'], B['uni'],
+                None if misma_unidad(A['uni'], B['uni']) else 'DIFERENCIA')
 
         campo, k = tipo_cantidad(A['cant'], B['cant'])
         add(n, A['desc'], campo.replace('CANTIDAD', 'CANTIDAD DEL RUBRO'),
@@ -601,7 +611,8 @@ def reporte(ref, ofe, salida, titulo_ref='', titulo_ofe='', correspondencia='',
     """
     import reporte as reporte_mod
     filas, resumen = comparar(ref, ofe, **kw)
-    fpres = comparar_presupuesto(pres_ref, pres_ofe, ofe) if pres_ref and pres_ofe else []
+    fpres = (comparar_presupuesto(pres_ref, pres_ofe, ofe, pdf=kw.get('pdf', False))
+             if pres_ref and pres_ofe else [])
     reporte_mod.generar(salida, filas, resumen, fpres, pres_ref, pres_ofe,
                         titulo_ref, titulo_ofe, correspondencia, notas_extra,
                         TOLERANCIA_INDIRECTOS)
@@ -620,7 +631,8 @@ def reporte_estatico(ref, ofe, salida, titulo_ref='', titulo_ofe='', corresponde
     from openpyxl.utils import get_column_letter
 
     filas, resumen = comparar(ref, ofe, **kw)
-    fpres = comparar_presupuesto(pres_ref, pres_ofe, ofe) if pres_ref and pres_ofe else []
+    fpres = (comparar_presupuesto(pres_ref, pres_ofe, ofe, pdf=kw.get('pdf', False))
+             if pres_ref and pres_ofe else [])
 
     wb = openpyxl.Workbook()
     TH = Font(bold=True, color='FFFFFF', size=10)

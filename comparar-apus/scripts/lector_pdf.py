@@ -25,10 +25,40 @@ from apu import SECS, clean, fila_vacia
 NUMTOK = re.compile(r'^-?\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?%?$|^-?\d+(?:[.,]\d+)?%?$')
 
 
+# La firma electronica se imprime ENCIMA de la tabla, no al final: sus renglones
+# caen dentro de las filas y se leen como items o como parte de una descripcion.
+# En un caso real, "SOBREACARREO DE ESCOMBROS, TIERRA DE" salio con un NARVAEZ
+# en medio, y la ultima pagina de un pliego aporto tres items de TRANSPORTE que
+# eran el bloque de firmas.
+FIRMA = re.compile(
+    r'firmado\s+electr[oó]nicamente|validar\s+[uú]nicamente|firmaec|'
+    r'ir\s+a\s+la\s+firma|al\s+menos\s+una\s+firma', re.I)
+
+
+def sin_firmas(txt):
+    """Quita los renglones de firma y el nombre suelto que dejan debajo."""
+    fuera, lineas = [], txt.split('\n')
+    for i, l in enumerate(lineas):
+        if FIRMA.search(l):
+            fuera.append(i)
+            # el nombre del firmante cae en los renglones de abajo, en
+            # mayusculas y sin cifras
+            for j in range(i + 1, min(i + 4, len(lineas))):
+                s = lineas[j].strip()
+                if not s or re.search(r'\d', s):
+                    break
+                nombre = (s == s.upper() and len(s.split()) <= 5) or \
+                    re.match(r'(?i)^(ing|arq|ab|dr|lic|sr|sra|econ)\.', s)
+                if not nombre:
+                    break
+                fuera.append(j)
+    return '\n'.join(l for i, l in enumerate(lineas) if i not in set(fuera))
+
+
 def paginas(pdf):
     txt = subprocess.run(['pdftotext', '-layout', pdf, '-'],
                          capture_output=True, text=True).stdout
-    return txt.split('\f')
+    return [sin_firmas(p) for p in txt.split('\f')]
 
 
 def _f(t, coma_decimal):
@@ -82,12 +112,12 @@ def parse_pagina(txt, etiquetas, coma_decimal=True, modo='derecha'):
             break
     head = lineas[:fin]
 
-    num, ini = None, 0
+    num, ini, fila_num = None, 0, None
     if etiquetas.get('num'):
         for i, ln in enumerate(head):
             m = re.search(etiquetas['num'], ln)
             if m:
-                num, ini = int(m.group(1)), i + 1
+                num, fila_num, ini = int(m.group(1)), i, i + 1
                 break
 
     # El valor de una celda vive en su columna: lo que venga despues de un hueco
@@ -97,21 +127,33 @@ def parse_pagina(txt, etiquetas, coma_decimal=True, modo='derecha'):
 
     campos = {k: [] for k in ('nombre', 'unidad', 'detalle')}
     pos, sueltos = {}, []
-    for i in range(ini, len(head)):
+    # La fila del numero de rubro tambien puede llevar una etiqueta a su derecha
+    # ("RUBRO No : 0002    UNIDAD: m2", "Rubro: 4    Unidad: m2"): se le miran
+    # las etiquetas, pero no se recoge su texto suelto, que es el propio rotulo
+    # del numero.
+    filas = ([fila_num] if fila_num is not None else []) + list(range(ini, len(head)))
+    for i in filas:
         s = head[i].strip()
+        # todas las etiquetas de la linea, no solo la primera: cuando DETALLE y
+        # UNIDAD comparten renglon, quedarse con una deja a la otra convertida
+        # en texto suelto, que acaba pegado al nombre del rubro
+        marcas = []
         for k in ('nombre', 'unidad', 'detalle'):
             pat = etiquetas.get(k)
             if not pat or k in pos:
                 continue
             m = re.search(pat, s)
-            if not m:
-                continue
-            # una misma fila puede llevar el final de una celda a la izquierda y
-            # la etiqueta de otra columna a la derecha
-            izq = corte(s[:m.start()])
-            if izq:
-                sueltos.append((i, izq))
-            resto = corte(s[m.end():])
+            if m:
+                marcas.append((m.start(), m.end(), k))
+        marcas.sort()
+        if not marcas:
+            continue
+        izq = corte(s[:marcas[0][0]])
+        if izq and i != fila_num:
+            sueltos.append((i, izq))
+        for j, (_, fin, k) in enumerate(marcas):
+            hasta = marcas[j + 1][0] if j + 1 < len(marcas) else len(s)
+            resto = corte(s[fin:hasta])
             # la etiqueta puede salir vacia arriba y repetirse con el valor mas
             # abajo; nos quedamos con la aparicion que trae contenido
             if resto:
@@ -119,7 +161,6 @@ def parse_pagina(txt, etiquetas, coma_decimal=True, modo='derecha'):
                 campos[k] = [(i, resto)]
             elif k not in pos:
                 pos[k] = i
-            break
     # una celda alta reparte su texto arriba y abajo de la etiqueta, porque Excel
     # lo centra verticalmente: cada fragmento va a la etiqueta mas cercana
     sueltos += [(i, corte(head[i])) for i in range(ini, len(head))
@@ -241,6 +282,85 @@ FRAG = {'PESO', 'RELATI', 'VO', 'ELEME', 'NTO', 'ELEMENTO', 'PRE', 'CPC', 'VAE',
 CODITEM = re.compile(r'^\s*[A-Za-z]{0,3}\d{1,5}[A-Za-z]?\s{2,}')
 
 
+def _pre_ushay(pagina):
+    """Normaliza una pagina del formato USHAY con columnas de VAE.
+
+    Tres arreglos, los tres por como pdftotext ve esta plantilla:
+
+    1. Recorta las columnas de la derecha (PESO RELATIVO, CPC, NP/ND/EP, VAE).
+       Traen cifras que no son del APU, y con ellas un renglon que solo lleva
+       texto parece una fila de item.
+    2. Junta la descripcion dentro de su columna. Excel la estira con espacios
+       ("PLANCHA   ACERO   ASTM  A  36"), y al partir por huecos anchos ese 36
+       se leia como la cantidad.
+    3. Pega a su fila los renglones de texto que envolvieron. Si la fila de
+       cifras no trae texto propio, el renglon que la sigue es la cola de su
+       descripcion; si lo trae, el renglon que la sigue es su cola SALVO que
+       dos lineas mas abajo venga una fila de solo cifras, porque entonces es
+       la cabeza de la descripcion del item siguiente.
+    """
+    out, cut, col, dentro = [], None, None, []
+    for l in pagina.split('\n'):
+        s = l.strip()
+        if 'PESO RELATIVO' in l or re.search(r'C=AxB|PRT ?= ?Td/Q|VAEt', l):
+            continue
+        if s.startswith('DESCRIPCION'):
+            i = l.find('ELEMENTO')
+            cut = i if i > 0 else cut
+            m = re.search(r'\b(CANTIDAD|UNIDAD|DISTANCIA)\b', l[len('DESCRIPCION'):])
+            col = m.start() + len('DESCRIPCION') if m else col
+            continue
+        if re.match(r'^(EQUIPOS|MANO DE OBRA|MATERIALES|TRANSPORTE)\b', s):
+            out.append(l)
+            dentro.append(len(out) - 1)
+            continue
+        l = l[:cut] if cut else l
+        if col and len(l) > 3:
+            izq, der = re.sub(r'\s+', ' ', l[:col]).strip(), l[col:].strip()
+            l = (izq + '   ' + der) if izq and der else (izq or ' ' * 20 + der)
+        if col:
+            dentro.append(len(out))
+        out.append(l)
+    return '\n'.join(_pegar_envueltas(out, set(dentro)))
+
+
+_FUERA = re.compile(r'^(SUBTOTAL|PARCIAL|TOTAL|COSTO|ESTOS PRECIOS|OTROS|EQUIPOS|'
+                    r'MANO DE OBRA|MATERIALES|TRANSPORTE)')
+
+
+def _pegar_envueltas(lineas, dentro):
+    """Une a su fila de cifras los renglones de texto que quedaron sueltos.
+
+    Solo dentro de las secciones de items: en la cabecera, "CODIGO DEL RUBRO: 4"
+    seguido de "NOMBRE DEL RUBRO: ..." cumple el mismo patron y no se toca.
+    """
+    parte = lambda l: [t for t in re.split(r'\s{2,}', l.strip()) if t]
+    es_num = lambda t: bool(NUMTOK.match(t))
+    for i, l in enumerate(lineas[:-1]):
+        if i not in dentro or (i + 1) not in dentro:
+            continue
+        t = parte(l)
+        if not t:
+            continue
+        sig = lineas[i + 1].strip()
+        if not sig or _FUERA.match(sig.upper()):
+            continue
+        t2 = parte(sig)
+        if any(es_num(x) for x in t2):
+            continue
+        if all(es_num(x) for x in t) and len(t) >= 2:
+            lineas[i] = ' '.join(t2) + '   ' + l.strip()
+        elif any(es_num(x) for x in t) and not es_num(t[0]):
+            sig2 = parte(lineas[i + 2]) if i + 2 < len(lineas) else []
+            if sig2 and len(sig2) >= 2 and all(es_num(x) for x in sig2):
+                continue
+            lineas[i] = t[0] + ' ' + ' '.join(t2) + '   ' + '   '.join(t[1:])
+        else:
+            continue
+        lineas[i + 1] = ''
+    return lineas
+
+
 def _pre_uem(pagina):
     out = []
     for ln in pagina.split('\n'):
@@ -295,6 +415,19 @@ def pie_pdf(pagina, coma_decimal):
                         break
             if m:
                 out['indirecto_pct'] = _f(m.group(1), coma_decimal)
+            elif out['directo']:
+                # Hay plantillas que imprimen el porcentaje sin el signo:
+                # "COSTO INDIRECTO    17,00    0,2732". Cual de las dos cifras
+                # es el porcentaje no se adivina, se comprueba: la que aplicada
+                # al costo directo da la otra.
+                vals = [v for v in (_f(x, coma_decimal) for x in cifras)
+                        if v is not None]
+                for a in vals:
+                    if 0 < a <= 100 and any(
+                            abs(out['directo'] * a / 100 - b) <= max(0.01, abs(b) * 0.02)
+                            for b in vals if b is not a):
+                        out['indirecto_pct'] = a
+                        break
         elif re.search(r'PRECIO\s+UNITARIO\s+TOTAL|COSTO\s+TOTAL|VALOR\s+OFERTADO',
                        s, re.I) and val is not None:
             out['precio'] = val
@@ -324,18 +457,60 @@ ETIQUETAS = {
                    'ignorar': r'UNIDAD EJECUTORA|ANALISIS PRECIO|DETERMINACI[ÓO]N|'
                               r'RECREACI[ÓO]N|CODIGO\b',
                    'pre': _pre_uem, 'coma_decimal': False, 'modo': 'izquierda'},
+    # "HOJA 4,00 DE 78" arriba, "Rubro:" con el NUMERO (no el nombre), "Unidad:"
+    # y "Detalle:", que es donde vive el nombre del rubro
+    'rubro_detalle': {'num': r'\bRubro:\s*(\d+)',
+                      'nombre': r'\bDetalle:\s*',
+                      'unidad': r'\bUnidad:\s*',
+                      'detalle': None,
+                      'ignorar': r'HOJA\b|CODIGO:|OFERENTE|PROYECTO|'
+                                 r'AN[ÁA]LISIS|ANALISIS',
+                      'coma_decimal': True, 'modo': 'izquierda'},
+    # USHAY con las columnas del VAE a la derecha: "CODIGO DEL RUBRO: 4",
+    # "NOMBRE DEL RUBRO:", "DETALLE:" impreso encima de "UNIDAD:"
+    'ushay_vae': {'num': r'C[ÓO]DIGO DEL RUBRO:\s*(\d+)',
+                  'nombre': r'NOMBRE DEL RUBRO:\s*',
+                  'unidad': r'\bUNIDAD:\s*',
+                  'detalle': r'\bDETALLE:\s*',
+                  # Excel imprime la celda DETALLE ENCIMA de la de UNIDAD: el
+                  # texto sale entrelazado y no se puede comparar. Se vacia para
+                  # que la comparacion lo descarte sola en vez de inventar
+                  # diferencias de especificacion que no existen.
+                  'detalle_fiable': False,
+                  'ignorar': r'NOMBRE DEL PROYECTO|NOMBRE DEL OFERENTE|'
+                             r'ANALISIS DE PRECIOS|DETERMINACI|Hoja\s+\d+\s+de',
+                  'pre': _pre_ushay,
+                  'coma_decimal': True, 'modo': 'izquierda'},
 }
 
 # Ajustes por defecto de cada preset, para que leer_pdf pueda autodetectar
 DEFECTOS = {'rubro_n':   {'coma_decimal': False, 'modo': 'derecha'},
             'hoja_n_de': {'coma_decimal': True,  'modo': 'izquierda'},
-            'uem_codigo': {'coma_decimal': False, 'modo': 'izquierda'}}
+            'uem_codigo': {'coma_decimal': False, 'modo': 'izquierda'},
+            'rubro_detalle': {'coma_decimal': True, 'modo': 'izquierda'},
+            'ushay_vae': {'coma_decimal': True, 'modo': 'izquierda'}}
+
+
+# Debajo de esta linea ya no hay items: esta el pie del APU y, mas abajo, el
+# bloque de firmas. Leer mas alla agrega al rubro cosas que no son insumos.
+# \s casa tambien el salto de linea: con \s+ el patron une la cabecera "TOTAL
+# COSTO" de una seccion con el "DIRECTO" del pie treinta renglones mas abajo y
+# corta la pagina por la mitad. Aqui los separadores son espacios de la misma
+# linea, nada mas.
+PIE = re.compile(r'(?im)^.*(TOTAL[ \t]+COSTO[ \t]+DIRECTO|COSTO[ \t]+DIRECTO[ \t]*:|'
+                 r'COSTO[ \t]+TOTAL[ \t]+DEL[ \t]+RUBRO|PRECIO[ \t]+UNITARIO[ \t]+TOTAL[ \t]*:|'
+                 r'VALOR[ \t]+OFERTADO).*$')
+
+
+def _corta_en_pie(txt):
+    m = PIE.search(txt)
+    return txt[:m.start()] if m else txt
 
 
 def _una(pagina, et, coma_decimal, modo, i):
     """Lee una pagina ya sabiendo el preset. Devuelve el APU o None."""
     pre = et.get('pre')
-    txt = pagina
+    txt = _corta_en_pie(pagina)
     cod = ''
     if pre is _pre_uem:
         # el codigo del rubro puede ser alfanumerico (P524) y parse_pagina espera
@@ -352,6 +527,26 @@ def _una(pagina, et, coma_decimal, modo, i):
         d['n'], d['codigo'] = i, cod
     d.update(pie_pdf(pagina, coma_decimal))
     return d
+
+
+def decimal_del_pdf(texto):
+    """True si el separador decimal es la coma. None si no se puede decidir.
+
+    El truco es mirar solo las cifras que NO pueden ser un separador de miles:
+    un grupo de miles tiene exactamente tres digitos, asi que una coma o un
+    punto seguidos de CUATRO digitos son, sin discusion, el decimal. Las
+    plantillas de APU imprimen las cantidades con cuatro decimales, de modo que
+    en la practica siempre hay de donde decidir.
+
+    Adivinarlo por prueba y error, en cambio, no avisa cuando se equivoca: con
+    el separador cambiado "0,0940" se lee 940 y el rubro entero sale mal sin
+    que nada falle.
+    """
+    coma = len(re.findall(r'\d,\d{4,}', texto))
+    punto = len(re.findall(r'\d\.\d{4,}', texto))
+    if coma == punto:
+        return None
+    return coma > punto
 
 
 def calidad(apus):
@@ -371,9 +566,12 @@ def detectar_pdf(ruta):
     multiplica o divide las cantidades por mil sin dar ninguna senal."""
     pgs = [p for p in paginas(ruta) if p.strip()][:6]
     mejor, punt = None, -1
+    cierto = decimal_del_pdf('\n'.join(pgs))
     for nombre, et in ETIQUETAS.items():
         base = DEFECTOS.get(nombre, {})
-        for coma in {base.get('coma_decimal', True), not base.get('coma_decimal', True)}:
+        opciones = ({cierto} if cierto is not None
+                    else {base.get('coma_decimal', True), not base.get('coma_decimal', True)})
+        for coma in opciones:
             modo = et.get('modo', base.get('modo', 'derecha'))
             try:
                 leidas = {}
@@ -420,5 +618,36 @@ def leer_pdf(ruta, etiquetas=None, coma_decimal=None, modo=None):
     for i, p in enumerate([x for x in paginas(ruta) if x.strip()], 1):
         d = _una(p, et, coma_decimal, modo, i)
         if d:
+            if et.get('detalle_fiable') is False:
+                d['detalle'] = ''
             out[d['n']] = d
-    return out
+    return _completar_con_tabla(out, ruta)
+
+
+def _unidad_plausible(u):
+    return bool(re.fullmatch(r'[A-Za-z][A-Za-z0-9/.\-]{0,5}', (u or '').strip()))
+
+
+def _completar_con_tabla(apus, ruta):
+    """Rellena la unidad del rubro con la tabla de cantidades del mismo PDF.
+
+    En algunas plantillas la celda DETALLE se imprime ENCIMA de la celda UNIDAD
+    y las dos salen entrelazadas: la unidad del rubro es ilegible por mucho que
+    se afine el lector de la cabecera. Pero el mismo documento suele traer, en
+    sus primeras paginas, la tabla de rubros con la unidad en su propia columna.
+    Se toma de ahi en vez de inventarla o de dejarla vacia, que en la
+    comparacion saldria como un cambio de unidad que no existe.
+    """
+    faltan = [n for n, d in apus.items() if not _unidad_plausible(d.get('unidad'))]
+    if not faltan:
+        return apus
+    try:
+        import tabla_pdf
+        tabla = tabla_pdf.leer(ruta)
+    except Exception:
+        return apus
+    for n in faltan:
+        fila = tabla.get(n)
+        if fila and _unidad_plausible(fila.get('uni')):
+            apus[n]['unidad'] = fila['uni']
+    return apus
