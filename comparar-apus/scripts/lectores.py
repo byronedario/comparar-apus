@@ -215,57 +215,81 @@ _FIN = ('SUBTOTAL', 'PARCIAL', 'TOTAL COSTO', 'COSTO TOTAL', 'ESTOS PRECIOS',
         'ESTE PRECIO', 'INDIRECTOS', 'UTILIDAD', 'VALOR OFERTADO')
 
 
+# El nombre de la seccion y el de su columna pueden compartir celda, separados
+# por un salto de linea ("EQUIPO\nDESCRIPCION", "CANTIDAD\nA"): se mira solo el
+# primer renglon. Y hay plantillas que escriben la seccion en singular.
+SINONIMOS_SEC = {'EQUIPO': 'EQUIPOS', 'EQUIPOS Y HERRAMIENTAS': 'EQUIPOS',
+                 'MANO DE OBRA': 'MANO DE OBRA', 'MATERIAL': 'MATERIALES',
+                 'MATERIALES': 'MATERIALES', 'TRANSPORTE': 'TRANSPORTE',
+                 'EQUIPOS': 'EQUIPOS'}
+
+
+def _primera_linea(v):
+    return clean(str(v).split('\n')[0]) if v is not None else ''
+
+
 def _seccion_en(fila):
     """(seccion, columna) si esta fila anuncia una seccion; si no, (None, None)."""
     for c, v in enumerate(fila[1:], 1):
-        t = clean(v).upper().rstrip(':').strip()
-        if t in SECS:
-            return t, c
+        t = _primera_linea(v).upper().rstrip(':').strip()
+        if t in SINONIMOS_SEC:
+            return SINONIMOS_SEC[t], c
     return None, None
 
 
 def _mapa_columnas(fila):
-    """{'desc': col, 'uni': col, 'cant': col} leyendo los nombres de la fila."""
+    """{'desc': col, 'uni': col, 'cant': col} leyendo los nombres de la fila.
+
+    Se miran TODOS los renglones de cada celda: la celda que anuncia la seccion
+    suele traer debajo, en la misma celda, el nombre de su columna
+    ("EQUIPO\nDESCRIPCION").
+    """
     m = {}
     for c, v in enumerate(fila[1:], 1):
-        t = clean(v).upper()
-        if not t:
+        if v is None:
             continue
-        for campo, pat in _COLS.items():
-            if campo not in m and re.match(pat, t):
-                m[campo] = c
-                break
+        for linea in str(v).split('\n'):
+            t = clean(linea).upper()
+            if not t:
+                continue
+            for campo, pat in _COLS.items():
+                if campo not in m and re.match(pat, t):
+                    m[campo] = c
+                    break
     return m
 
 
-def formato_generico(ws, max_fil=120, max_col=16):
-    g = grid(ws, max_fil, max_col)
+def formato_generico(ws, max_fil=120, max_col=16, g=None):
+    g = g if g is not None else grid(ws, max_fil, max_col)
+    max_fil = min(max_fil, len(g) - 1)
     A = lambda r, c: g[r][c]
     filas = [[A(r, c) for c in range(0, max_col + 1)] for r in range(0, max_fil + 1)]
 
-    nombre = codigo = unidad = detalle = ''
+    campos_cab = {'nombre': '', 'codigo': '', 'unidad': '', 'detalle': ''}
+    ROTULOS = [('nombre', r'(?:NOMBRE DEL |DESCRIPCI[ÓO]N DEL )?RUBRO'),
+               ('codigo', r'C[ÓO]DIGO'),
+               ('unidad', r'UNIDAD'),
+               ('detalle', r'DETALLE|ESPECIFICACI[ÓO]N')]
     for r in range(1, min(20, max_fil) + 1):
         for c in range(1, max_col):
-            t = clean(A(r, c))
-            if not t:
+            celda = clean(A(r, c))
+            if not celda:
                 continue
-            val = next((clean(A(r, k)) for k in range(c + 1, max_col + 1)
-                        if clean(A(r, k))), '')
+            # el rotulo puede traer su valor en la MISMA celda ("RUBRO: REPLANTEO
+            # MANUAL...") o en la de al lado; se mira primero dentro
+            m = re.match(r'(?i)^\s*([A-ZÁÉÍÓÚÑ .]{3,30}?)\s*:\s*(.*)$', celda)
+            t, dentro = (m.group(1).strip() + ':', clean(m.group(2))) if m else (celda, '')
+            val = dentro or next((clean(A(r, k)) for k in range(c + 1, max_col + 1)
+                                  if clean(A(r, k))), '')
             # si lo siguiente a la derecha es otro rotulo ("DETALLE:" seguido de
             # "R(H/U):"), esta celda esta vacia y no hay que robarle el valor al
             # vecino
             if val.endswith(':'):
                 val = ''
-            if re.fullmatch(r'RUBRO\s*:?', t, re.I) and not nombre:
-                nombre = val
-            elif re.fullmatch(r'(NOMBRE DEL RUBRO|DESCRIPCI[ÓO]N)\s*:', t, re.I) and not nombre:
-                nombre = val
-            elif re.fullmatch(r'C[ÓO]DIGO\s*:?', t, re.I) and not codigo:
-                codigo = val
-            elif re.fullmatch(r'UNIDAD\s*:?', t, re.I) and not unidad:
-                unidad = val
-            elif re.fullmatch(r'(DETALLE|ESPECIFICACI[ÓO]N)\s*:?', t, re.I) and not detalle:
-                detalle = val
+            for campo, pat in ROTULOS:
+                if not campos_cab[campo] and re.fullmatch(r'(?:%s)\s*:?' % pat, t, re.I):
+                    campos_cab[campo] = val
+                    break
 
     secs, r = {}, 1
     while r <= max_fil:
@@ -274,7 +298,7 @@ def formato_generico(ws, max_fil=120, max_col=16):
             r += 1
             continue
         # la fila de encabezados va justo debajo; puede haber una segunda linea
-        mapa, rr = {}, r + 1
+        mapa, rr = {}, r
         while rr <= min(r + 4, max_fil):
             m = _mapa_columnas(filas[rr])
             if 'desc' in m and 'cant' in m:
@@ -289,19 +313,85 @@ def formato_generico(ws, max_fil=120, max_col=16):
             texto = ' '.join(clean(x) for x in filas[rr][1:]).upper().strip()
             if texto.startswith(_FIN) or _seccion_en(filas[rr])[0]:
                 break
-            d = A(rr, mapa['desc'])
+            d = clean(A(rr, mapa['desc']))
             q = A(rr, mapa['cant'])
             u = A(rr, mapa['uni']) if 'uni' in mapa else None
-            if not fila_vacia(d, q):
-                items.append({'desc': clean(d), 'uni': clean(u), 'cant': num(q)})
+            # el codigo de estructura ocupacional puede ir en su propia columna
+            # ("PEON" | "EO E2"): pegado a la descripcion, el emparejamiento por
+            # codigo vuelve a funcionar
+            for c in range(mapa['desc'] + 1, mapa['cant']):
+                t = clean(A(rr, c))
+                if re.fullmatch(r'(?i)(E\.?O\.?|ESTR?\.? ?OC\.?)\s*[A-E][1-3]', t):
+                    d = clean(d + ' ' + t)
+                    break
+            # un item sin cantidad no es un item: son los renglones de plantilla
+            # ("Herramienta Menor 0% de M.O.") y las filas de relleno
+            if num(q) is not None and not fila_vacia(d, q):
+                items.append({'desc': d, 'uni': clean(u), 'cant': num(q)})
             rr += 1
         secs[sec] = items
         r = rr
 
-    d = {'codigo': codigo, 'nombre': nombre, 'unidad': unidad,
-         'detalle': detalle, 'secs': secs}
+    # Un nombre de rubro nunca es solo un numero: hay plantillas donde "RUBRO:"
+    # lleva el numero y el nombre vive en "DETALLE:". Si es el caso, se cambian.
+    if re.fullmatch(r'\d{1,3}', campos_cab['nombre'] or '') and campos_cab['detalle']:
+        campos_cab['nombre'], campos_cab['detalle'] = campos_cab['detalle'], ''
+
+    d = dict(campos_cab, secs=secs)
     d.update(pie(A, max_fil, max_col))
     return d
+
+
+# ---------------------------------------------------------------------------
+# Un solo libro con TODOS los rubros apilados en una hoja
+#
+# `leer_libro` da por hecho una hoja por rubro. Hay plantillas que ponen los 78
+# APUs uno debajo de otro en la misma hoja, separados por su propia cabecera
+# ("RUBRO : 3", "HOJA 3 DE 78"). Se corta la hoja en bloques y cada bloque se
+# lee con el formato generico, que no depende de en que fila empiece nada.
+# ---------------------------------------------------------------------------
+_CABECERA_RUBRO = re.compile(r'(?i)^\s*RUBRO\s*(?:No\.?|N[°º])?\s*:\s*(\d{1,3})\b')
+_HOJA_N = re.compile(r'(?i)\bHOJA\s*:?\s*(\d{1,3})\s*(?:DE|/)\s*\d{1,3}\b')
+
+
+def cortes_por_rubro(g, max_fil, max_col):
+    """[(n, fila_inicio)] de cada rubro apilado en la hoja.
+
+    Se busca "RUBRO : n" y, si no aparece, "HOJA n DE 78", que es la otra marca
+    con la que estas plantillas separan un analisis del siguiente.
+    """
+    cortes = []
+    for r in range(1, max_fil + 1):
+        for c in range(1, max_col + 1):
+            t = clean(g[r][c])
+            if not t:
+                continue
+            m = _CABECERA_RUBRO.match(t) or _HOJA_N.search(t)
+            if m:
+                n = int(m.group(1))
+                if not cortes or cortes[-1][0] != n:
+                    cortes.append((n, r))
+                break
+    return cortes
+
+
+def leer_hoja_unica(ruta, hoja=None, max_col=16):
+    """{n: apu} de un libro que apila todos los rubros en una sola hoja."""
+    import openpyxl
+    wb = openpyxl.load_workbook(ruta, read_only=True, data_only=True)
+    hoja = hoja or wb.sheetnames[0]
+    ws = wb[hoja]
+    max_fil = ws.max_row or 0
+    g = grid(ws, max_fil, max_col)
+    cortes = cortes_por_rubro(g, max_fil, max_col)
+    out = {}
+    for i, (n, r0) in enumerate(cortes):
+        r1 = cortes[i + 1][1] - 1 if i + 1 < len(cortes) else max_fil
+        # el bloque se re-indexa desde 1 para que formato_generico lo lea como
+        # si fuera una hoja suelta
+        sub = [[None] * (max_col + 1)] + [g[r][:] for r in range(r0, r1 + 1)]
+        out[n] = formato_generico(None, len(sub) - 1, max_col, g=sub)
+    return out
 
 
 FORMATOS = {'A': formato_a, 'B': formato_b, 'C': formato_c,

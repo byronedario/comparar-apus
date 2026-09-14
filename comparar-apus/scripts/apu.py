@@ -150,7 +150,34 @@ def cod_ocupacional(s):
     m = re.search(r'\bEST\w*\.?\s*OC\w*\.?\s*\(?\s*([A-E][1-3])\b', s)
     if not m:
         m = re.search(r'\bOCUPAC?\.?\s*([A-E][1-3])\b', s)
+    if not m:
+        # algunas plantillas ponen el codigo en su propia columna, abreviado a
+        # "EO E2" o "E.O. E2", sin la palabra "estructura ocupacional"
+        m = re.search(r'\bE\.?\s?O\.?\s+([A-E][1-3])\b', s)
     return m.group(1) if m else None
+
+
+def mismo_obrero(ref, ofe):
+    """True si las dos descripciones nombran al mismo obrero.
+
+    Vale por codigo ("ESTRUC. OCUPAC. E2 PEON" y "PEON EO E2") y tambien cuando
+    el oferente se limita a quitar el prefijo de la estructura ocupacional
+    ("ESTRUC. OCUPAC. C3 SOLDADOR EN CONSTRUCCION" -> "SOLDADOR EN
+    CONSTRUCCION"): ahi no hay codigo que comparar, pero las palabras del
+    oferente son un subconjunto de las de la referencia.
+    """
+    ca, cb = cod_ocupacional(ref), cod_ocupacional(ofe)
+    if ca and cb:
+        return ca == cb
+    quita = lambda s: re.sub(r'(?i)\bESTRUC?\w*\.?\s*OCUPAC?\w*\.?\s*[A-E][1-3]\b', ' ', s or '')
+    pa, pb = palabras(quita(ref)), palabras(quita(ofe))
+    return bool(pa and pb and (pa <= pb or pb <= pa))
+
+
+def es_recorte(ref, ofe, minimo=20):
+    """True si la oferta es la referencia cortada por la mitad de la frase."""
+    x, y = nd(ref), nd(ofe)
+    return bool(x and y and len(y) >= minimo and x.startswith(y) and len(x) > len(y))
 
 
 def emparejar(a, b, sec=None):
@@ -163,10 +190,24 @@ def emparejar(a, b, sec=None):
     libres = list(range(len(b)))
     par = [None] * len(a)
 
+    def compatible(x, y):
+        """Dos items de mano de obra con codigo ocupacional distinto NO son el
+        mismo obrero, por mucho que se parezcan sus nombres.
+
+        Sin esta regla, "ESTRUC. OCUPAC. E2 PEON" se emparejaba con
+        "ESTRUCTURA OCUPACIONAL D2" -por el parecido literal de "ESTRUC OCUPAC"-
+        y a partir de ahi todo se desplazaba: el D2 de verdad salia como
+        faltante y su cantidad como una baja que no existia.
+        """
+        if sec != 'MANO DE OBRA':
+            return True
+        cx, cy = cod_ocupacional(x['desc']), cod_ocupacional(y['desc'])
+        return not (cx and cy and cx != cy)
+
     # 1) descripcion identica una vez normalizada
     for i, x in enumerate(a):
         for j in libres:
-            if nd(b[j]['desc']) == nd(x['desc']):
+            if compatible(x, b[j]) and nd(b[j]['desc']) == nd(x['desc']):
                 par[i] = j
                 libres.remove(j)
                 break
@@ -177,6 +218,8 @@ def emparejar(a, b, sec=None):
             continue
         mejor, punt = None, UMBRAL
         for j in libres:
+            if not compatible(x, b[j]):
+                continue
             r = difflib.SequenceMatcher(None, nd(x['desc']), nd(b[j]['desc'])).ratio()
             if r > punt:
                 mejor, punt = j, r
@@ -194,6 +237,8 @@ def emparejar(a, b, sec=None):
             continue
         mejor, punt = None, 0
         for j in libres:
+            if not compatible(x, b[j]):
+                continue
             py = palabras(b[j]['desc'])
             com = px & py
             if com and (com == px or com == py):
@@ -400,8 +445,35 @@ def detectar_patrones(ref, ofe):
     return sistematico(mo_patron, mo_total), sistematico(un_patron, un_total)
 
 
+def detectar_truncamiento(ref, ofe, minimo=8):
+    """True si la plantilla del oferente corta las descripciones a lo ancho.
+
+    Hay archivos que guardan la descripcion recortada a un numero fijo de
+    caracteres ("EQUIPO PINTURA (COMPRESOR 2HP-"). Si eso pasa muchas veces y
+    siempre a la misma anchura, no es que el oferente haya cambiado el insumo:
+    es su plantilla. Se exige que los recortes se concentren en una o dos
+    longitudes, para no confundirlo con descripciones distintas de verdad.
+    """
+    largos = []
+    for n in ref:
+        O = ofe.get(n)
+        if O is None:
+            continue
+        for sec in SECS:
+            for ia, ib, _, _ in emparejar(ref[n]['secs'].get(sec, []),
+                                          O['secs'].get(sec, []), sec):
+                if ia is not None and ib is not None and es_recorte(ia['desc'], ib['desc']):
+                    largos.append(len(clean(ib['desc'])))
+    if len(largos) < minimo:
+        return False
+    frecuente = max(set(largos), key=largos.count)
+    cerca = sum(1 for L in largos if abs(L - frecuente) <= 1)
+    return cerca >= 0.7 * len(largos)
+
+
 def comparar(ref, ofe, pdf=False, comparar_detalle=None, comparar_indirectos=True,
-             nomenclatura_mo_menor=None, unidades_equivalentes_menor=None):
+             nomenclatura_mo_menor=None, unidades_equivalentes_menor=None,
+             truncadas=None):
     """Compara dos diccionarios {n: apu} y devuelve (filas, resumen).
 
     pdf                          la oferta viene de un PDF: activa TEXTO CORTADO.
@@ -426,6 +498,8 @@ def comparar(ref, ofe, pdf=False, comparar_detalle=None, comparar_indirectos=Tru
             nomenclatura_mo_menor = mo
         if unidades_equivalentes_menor is None:
             unidades_equivalentes_menor = un
+    if truncadas is None:
+        truncadas = detectar_truncamiento(ref, ofe)
 
     for n in sorted(ref):
         S = ref[n]
@@ -480,11 +554,11 @@ def comparar(ref, ofe, pdf=False, comparar_detalle=None, comparar_indirectos=Tru
                     continue
 
                 k = tipo_texto(ia['desc'], ib['desc'], pdf)
-                if (k == 'DIFERENCIA' and nomenclatura_mo_menor
-                        and sec == 'MANO DE OBRA'
-                        and cod_ocupacional(ia['desc'])
-                        and cod_ocupacional(ia['desc']) == cod_ocupacional(ib['desc'])):
+                if k == 'DIFERENCIA' and nomenclatura_mo_menor and sec == 'MANO DE OBRA' \
+                        and mismo_obrero(ia['desc'], ib['desc']):
                     k = 'MENOR'
+                if k == 'DIFERENCIA' and truncadas and es_recorte(ia['desc'], ib['desc']):
+                    k = 'TEXTO CORTADO'
                 add(sec, lbl, 'DESCRIPCION', ia['desc'], ib['desc'], k)
 
                 if sec in ('MATERIALES', 'TRANSPORTE'):

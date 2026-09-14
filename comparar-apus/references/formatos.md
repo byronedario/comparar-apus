@@ -288,6 +288,14 @@ escribe `UNIDAD`. Van en `apu.EQUIV_UNIDAD`; si a una le falta su variante, la
 bandera `unidades_equivalentes_menor` no llega al umbral y doce renombrados
 sistemáticos salen en rojo.
 
+**La plantilla del oferente recorta las descripciones.** Hay archivos que
+guardan la descripción cortada a un número fijo de caracteres
+(`EQUIPO PINTURA (COMPRESOR 2HP-`). Si eso pasa muchas veces y siempre a la
+misma anchura, no es un cambio de insumo: es su plantilla.
+`apu.detectar_truncamiento()` lo reconoce y esos casos pasan a TEXTO CORTADO.
+Se exige que los recortes se concentren en una o dos longitudes, para no
+confundirlo con descripciones distintas de verdad.
+
 ## Cómo agregar un formato nuevo
 
 1. Vuelca una hoja o página cruda y ubica: fila de la cabecera, filas de

@@ -526,6 +526,16 @@ ETIQUETAS = {
                         'ignorar': r'ANALISIS DE PRECIOS|R\(H/U\)|CONSTRUCCION|'
                                    r'INFRAESTRUCTURA|LIGA DEPORTIVA|Hoja\s+\d+\s+de',
                         'coma_decimal': False, 'modo': 'izquierda'},
+    # USHAY sin numero de rubro impreso: un rubro por pagina, "RUBRO:" con el
+    # nombre y "UNIDAD:" en el mismo renglon
+    'ushay_rubro': {'num': None, 'num_por_pagina': True,
+                    'nombre': r'\bRUBRO:\s*',
+                    'unidad': r'\bUNIDAD:\s*',
+                    'detalle': r'\bDETALLE:\s*',
+                    'ignorar': r'PROYECTO:|OFERENTE:|ANALISIS DE PRECIOS|'
+                               r'DETERMINACI|CONSTRUCCION Y MEJORAMIENTO',
+                    'pre': _pre_ushay,
+                    'coma_decimal': False, 'modo': 'izquierda'},
     # USHAY con las columnas del VAE a la derecha: "CODIGO DEL RUBRO: 4",
     # "NOMBRE DEL RUBRO:", "DETALLE:" impreso encima de "UNIDAD:"
     'ushay_vae': {'num': r'C[ÓO]DIGO DEL RUBRO:\s*(\d+)',
@@ -549,7 +559,8 @@ DEFECTOS = {'rubro_n':   {'coma_decimal': False, 'modo': 'derecha'},
             'uem_codigo': {'coma_decimal': False, 'modo': 'izquierda'},
             'rubro_detalle': {'coma_decimal': True, 'modo': 'izquierda'},
             'hoja_n_de_rubro': {'coma_decimal': False, 'modo': 'izquierda'},
-            'ushay_vae': {'coma_decimal': True, 'modo': 'izquierda'}}
+            'ushay_vae': {'coma_decimal': True, 'modo': 'izquierda'},
+            'ushay_rubro': {'coma_decimal': False, 'modo': 'izquierda'}}
 
 
 # Debajo de esta linea ya no hay items: esta el pie del APU y, mas abajo, el
@@ -582,6 +593,13 @@ def _una(pagina, et, coma_decimal, modo, i):
     if pre:
         txt = pre(txt)
     d = parse_pagina(txt, et, coma_decimal, modo)
+    if not d['n'] and et.get('num_por_pagina'):
+        # hay plantillas que no imprimen el numero del rubro en ninguna parte:
+        # va un rubro por pagina y en el mismo orden del presupuesto, asi que el
+        # numero de pagina ES el numero de rubro. Se acepta solo si la pagina
+        # trajo nombre, para no numerar caratulas ni anexos.
+        if d.get('nombre'):
+            d['n'] = i
     if not d['n']:
         return None
     if cod:
@@ -621,14 +639,21 @@ def calidad(apus):
             + sum(3 for d in apus.values() if d['unidad']))
 
 
-def detectar_pdf(ruta):
+def detectar_pdf(ruta, _solo=None):
     """(preset, coma_decimal, modo) probando los presets sobre las primeras
     paginas. El decimal se prueba en los dos sentidos porque equivocarlo
     multiplica o divide las cantidades por mil sin dar ninguna senal."""
     pgs = [p for p in paginas(ruta) if p.strip()][:6]
     mejor, punt = None, -1
     cierto = decimal_del_pdf('\n'.join(pgs))
-    for nombre, et in ETIQUETAS.items():
+    # Numerar por pagina es el ultimo recurso: si algun preset encuentra el
+    # numero del rubro IMPRESO, ese gana. Si no, un PDF con dos paginas de
+    # presupuesto delante de los APUs se lee corrido, con cada rubro numerado
+    # dos puestos mas alla. Por eso se prueban primero los presets que leen el
+    # numero, y solo si ninguno sirve se prueban los que cuentan paginas.
+    candidatos = ([(k, v) for k, v in (_solo or ETIQUETAS).items()
+                   if _solo or not v.get('num_por_pagina')])
+    for nombre, et in candidatos:
         base = DEFECTOS.get(nombre, {})
         opciones = ({cierto} if cierto is not None
                     else {base.get('coma_decimal', True), not base.get('coma_decimal', True)})
@@ -652,6 +677,9 @@ def detectar_pdf(ruta):
                 p_ -= 50
             if p_ > punt:
                 mejor, punt = (nombre, coma, modo), p_
+    if mejor is None and candidatos:
+        por_pagina = {k: v for k, v in ETIQUETAS.items() if v.get('num_por_pagina')}
+        return detectar_pdf(ruta, _solo=por_pagina) if por_pagina else None
     return mejor
 
 

@@ -247,6 +247,12 @@ código ocupacional pueden ser casualidad, treinta son una decisión.
 
 ## Lo que cuesta caro si se pasa por alto
 
+**Dos obreros con distinto código ocupacional no son el mismo obrero.** Por
+mucho que se parezcan los nombres: `ESTRUC. OCUPAC. E2 PEON` y
+`ESTRUCTURA OCUPACIONAL D2` comparten casi todas las letras, y emparejarlos
+desplaza todo lo que sigue —el D2 de verdad sale como faltante y su cantidad
+como una baja que no existe—. `emparejar()` lo impide en MANO DE OBRA.
+
 **Los ítems se emparejan por descripción, nunca por posición.** Si el oferente
 intercala un ítem propio, comparar por posición corre todo lo que sigue y
 produce una cascada de "falta" y "sobra" falsos. `apu.emparejar()` hace cuatro
@@ -294,6 +300,10 @@ contra el original antes de reportarla. La forma barata de demostrarlo es la
 aritmética de la fila y el subtotal del rubro: lo que no cuadra está mal leído.
 
 ## Si el formato no encaja
+
+Si el libro pone **todos los rubros apilados en una sola hoja**, usa
+`lectores.leer_hoja_unica()`: corta la hoja por la cabecera de cada rubro
+("RUBRO : 3", "HOJA 3 DE 78") y lee cada bloque con el formato generico.
 
 Para Excel, prueba primero el formato `G` (`lectores.formato_generico`): no fija
 ninguna columna, las busca por su nombre en la fila de encabezados de cada
