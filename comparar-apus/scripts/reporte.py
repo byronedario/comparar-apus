@@ -186,13 +186,25 @@ def generar(salida, filas, resumen, filas_pres=(), presup_ref=None,
     rs.auto_filter.ref = 'A1:P%d' % max(len(datos) + 1, 1)
 
     # ---------------- PRESUPUESTO -------------------------------------------
-    if filas_pres:
+    # La hoja se crea SIEMPRE que se hayan leido los dos presupuestos, aunque no
+    # haya nada que observar. Omitirla cuando todo coincide es ambiguo: quien
+    # abre el reporte no puede distinguir "los dos presupuestos son identicos"
+    # de "no se pudo leer el presupuesto y no se comparo nada".
+    if filas_pres or (presup_ref and presup_ofe):
         pp = wb.create_sheet('PRESUPUESTO')
+        datos_pres = [list(x) for x in filas_pres]
+        if not datos_pres:
+            comunes = len(set(presup_ref) & set(presup_ofe))
+            datos_pres = [['', 'SIN OBSERVACIONES',
+                           'Se compararon los %d rubros del presupuesto: descripcion, '
+                           'unidad, cantidad de obra y precio unitario contra el APU de '
+                           'la propia oferta.' % comunes,
+                           '', '', 'OK']]
         _hoja(pp, ['RUBRO N.', 'RUBRO', 'CAMPO', 'VALOR EN LA REFERENCIA',
-                   'VALOR EN LA OFERTA', 'TIPO'], [list(x) for x in filas_pres],
+                   'VALOR EN LA OFERTA', 'TIPO'], datos_pres,
               [10, 52, 44, 38, 38, 16])
-        _semaforo(pp, 6, 2, len(filas_pres) + 1)
-        pp.auto_filter.ref = 'A1:F%d' % (len(filas_pres) + 1)
+        _semaforo(pp, 6, 2, len(datos_pres) + 1)
+        pp.auto_filter.ref = 'A1:F%d' % (len(datos_pres) + 1)
 
     # ---------------- SOLO ERRORES (vista viva) -----------------------------
     se = wb.create_sheet('SOLO ERRORES')
